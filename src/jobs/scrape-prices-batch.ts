@@ -2,7 +2,7 @@
 
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import { applyScrapeResult, type ShopPriceRow } from "../db/apply-scrape-result.js";
-import { db } from "../db/client.js";
+import { closeDb, db } from "../db/client.js";
 import { products, productsShopsPrices } from "../db/schema.js";
 import { scrapePrice } from "../scrape-price.js";
 import type { ShopId } from "../types.js";
@@ -177,7 +177,13 @@ async function main() {
   console.timeEnd("batch-shop-prices");
 }
 
-void main().catch((err) => {
-  console.error("[ERROR] prices batch failed", err);
-  process.exit(1);
-});
+void main()
+  .then(async () => {
+    await closeDb();
+    process.exit(0);
+  })
+  .catch(async (err) => {
+    console.error("[ERROR] prices batch failed", err);
+    await closeDb();
+    process.exit(1);
+  });

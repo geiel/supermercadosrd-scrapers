@@ -33,3 +33,12 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 export const db = drizzle({ client, schema });
+export const postgresClient = client;
+
+export async function closeDb(): Promise<void> {
+  try {
+    await postgresClient.end({ timeout: 5 });
+  } catch {
+    // Ignore close errors during shutdown to avoid masking the main job result.
+  }
+}

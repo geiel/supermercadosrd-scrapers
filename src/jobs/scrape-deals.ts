@@ -2,7 +2,7 @@
 
 import { eq, sql } from "drizzle-orm";
 import { applyScrapeResult, type ShopPriceRow } from "../db/apply-scrape-result.js";
-import { db } from "../db/client.js";
+import { closeDb, db } from "../db/client.js";
 import { productsShopsPrices, todaysDeals } from "../db/schema.js";
 import { scrapePrice } from "../scrape-price.js";
 import type { ShopId } from "../types.js";
@@ -143,7 +143,13 @@ async function main() {
   console.log("[INFO] refresh deals completed");
 }
 
-void main().catch((err) => {
-  console.error("[ERROR] deals scrape failed", err);
-  process.exit(1);
-});
+void main()
+  .then(async () => {
+    await closeDb();
+    process.exit(0);
+  })
+  .catch(async (err) => {
+    console.error("[ERROR] deals scrape failed", err);
+    await closeDb();
+    process.exit(1);
+  });
