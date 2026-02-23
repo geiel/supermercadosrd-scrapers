@@ -19,6 +19,30 @@ function getChromiumUrl(): string {
   return "https://github.com/nicholaschun/chromium/releases/download/v133.0.0/chromium-v133.0.0-pack.tar";
 }
 
+function detectBlockReason(html: string, title: string): string | null {
+  const lowerHtml = html.toLowerCase();
+  const lowerTitle = title.toLowerCase();
+
+  if (
+    lowerHtml.includes("sorry, you have been blocked") ||
+    lowerHtml.includes("attention required") ||
+    lowerHtml.includes("cf-error-code") ||
+    lowerHtml.includes("cloudflare") ||
+    lowerTitle.includes("attention required")
+  ) {
+    return "blocked";
+  }
+
+  if (
+    lowerTitle.includes("just a moment") ||
+    lowerTitle.includes("checking your browser")
+  ) {
+    return "cloudflare_challenge";
+  }
+
+  return null;
+}
+
 async function applyStealthSettings(page: Page): Promise<void> {
   await page.evaluateOnNewDocument(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => false });
@@ -72,10 +96,14 @@ async function launchBrowser(): Promise<Browser> {
   });
 }
 
-export async function fetchWithBrowser(
+export type BrowserFetchResult =
+  | { ok: true; html: string }
+  | { ok: false; reason: string };
+
+export async function fetchWithBrowserDetailed(
   url: string,
   timeout = 60000
-): Promise<string | null> {
+): Promise<BrowserFetchResult> {
   let browser: Browser | null = null;
 
   try {
@@ -85,10 +113,14 @@ export async function fetchWithBrowser(
     await applyStealthSettings(page);
     await page.setViewport({ width: 1920, height: 1080 });
 
-    await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout,
-    });
+    try {
+      await page.goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout,
+      });
+    } catch {
+      return { ok: false, reason: "navigation_failed" };
+    }
 
     try {
       await page.waitForFunction(
@@ -104,27 +136,37 @@ export async function fetchWithBrowser(
         { timeout: 15000 }
       );
     } catch {
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      // We still inspect the DOM after timeout to report whether this is a block/challenge.
     }
 
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    const html = await page.content();
-    if (
-      html.includes("Attention Required") ||
-      html.includes("Sorry, you have been blocked")
-    ) {
-      return null;
+    const [html, title] = await Promise.all([page.content(), page.title()]);
+    const blockReason = detectBlockReason(html, title);
+    if (blockReason) {
+      return { ok: false, reason: blockReason };
     }
 
-    return html;
+    if (!html.trim()) {
+      return { ok: false, reason: "empty_html" };
+    }
+
+    return { ok: true, html };
   } catch {
-    return null;
+    return { ok: false, reason: "request_failed" };
   } finally {
     if (browser) {
       await browser.close();
     }
   }
+}
+
+export async function fetchWithBrowser(
+  url: string,
+  timeout = 60000
+): Promise<string | null> {
+  const result = await fetchWithBrowserDetailed(url, timeout);
+  return result.ok ? result.html : null;
 }
 
 const USER_AGENTS = [

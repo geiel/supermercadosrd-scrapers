@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import { fetchWithBrowser } from "../http-client.js";
+import { fetchWithBrowserDetailed } from "../http-client.js";
 import { error, notFound, ok } from "../result.js";
 import type { ScrapePriceInput, ScrapePriceResult } from "../types.js";
 
@@ -8,10 +8,13 @@ const shopId = 3;
 export async function scrapeJumboPrice(
   input: ScrapePriceInput
 ): Promise<ScrapePriceResult> {
-  const html = await fetchWithBrowser(input.url);
-  if (!html) {
-    return error(shopId, "request_failed", true, false);
+  const response = await fetchWithBrowserDetailed(input.url);
+  if (!response.ok) {
+    const retryable = response.reason !== "blocked";
+    return error(shopId, response.reason, retryable, false);
   }
+
+  const { html } = response;
 
   const $ = cheerio.load(html);
   const finalPrice = $('span[data-price-type="finalPrice"]').attr(
