@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Public scraping package for Dominican supermarket price extraction",
   "type": "module",
+  "packageManager": "pnpm@8.14.0",
   "license": "MIT",
   "author": "supermercadosrd",
   "repository": {
@@ -18,10 +19,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./cli": {
-      "types": "./dist/cli.d.ts",
-      "import": "./dist/cli.js"
     }
   },
   "files": [
@@ -30,8 +27,6 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "clean": "rm -rf dist",
-    "dev": "tsx src/cli.ts",
-    "scrape": "tsx src/cli.ts",
     "scrape:prices-batch": "tsx src/jobs/scrape-prices-batch.ts",
     "scrape:deals": "tsx src/jobs/scrape-deals.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
