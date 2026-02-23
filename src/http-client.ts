@@ -94,6 +94,10 @@ function normalizeBrowserErrorReason(rawError: unknown): string {
     return "browser_launch_failed";
   }
 
+  if (message.includes("could not find chrome")) {
+    return "browser_not_installed";
+  }
+
   return "request_failed";
 }
 
