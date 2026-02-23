@@ -1,0 +1,40 @@
+name: scrape-prices-batch
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scrape-prices-batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Run prices batch scraper
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          POSTGRES_MAX_CONNECTIONS: ${{ secrets.POSTGRES_MAX_CONNECTIONS }}
+          REVALIDATE_BASE_URL: ${{ secrets.REVALIDATE_BASE_URL }}
+          REVALIDATION_SECRET: ${{ secrets.REVALIDATION_SECRET }}
+        run: |
+          pnpm scrape:prices-batch \
+            --iterations 80 \
+            --urls-per-shop 5 \
+            --delay-min 600 \
+            --delay-max 1200

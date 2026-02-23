@@ -1,0 +1,53 @@
+{
+  "name": "supermercadosrd-scrapers",
+  "version": "0.1.0",
+  "description": "Public scraping package for Dominican supermarket price extraction",
+  "type": "module",
+  "license": "MIT",
+  "author": "supermercadosrd",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/supermercadosrd-scrapers.git"
+  },
+  "engines": {
+    "node": ">=20.18.1"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist",
+    "dev": "tsx src/cli.ts",
+    "scrape": "tsx src/cli.ts",
+    "scrape:prices-batch": "tsx src/jobs/scrape-prices-batch.ts",
+    "scrape:deals": "tsx src/jobs/scrape-deals.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sparticuz/chromium-min": "^143.0.4",
+    "cheerio": "^1.1.2",
+    "drizzle-orm": "^0.44.6",
+    "postgres": "^3.4.7",
+    "puppeteer": "^24.35.0",
+    "puppeteer-core": "^24.35.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.11",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}

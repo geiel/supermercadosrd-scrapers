@@ -1,0 +1,14 @@
+[
+  {
+    "id": "demo-sirena",
+    "shopId": 1,
+    "url": "https://sirena.do/producto/demo",
+    "api": "https://api.sirena.do/product/demo"
+  },
+  {
+    "id": "demo-nacional",
+    "shopId": 2,
+    "url": "https://supermercadosnacional.com/producto/demo",
+    "api": null
+  }
+]
