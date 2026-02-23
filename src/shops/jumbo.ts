@@ -17,6 +17,14 @@ export async function scrapeJumboPrice(
   const { html } = response;
 
   const $ = cheerio.load(html);
+  const title =
+    $('meta[property="og:title"]').attr("content")?.trim() ??
+    $("title").first().text().trim();
+
+  if (title.toLowerCase().includes("404")) {
+    return notFound(shopId, "product_not_found", true);
+  }
+
   const finalPrice = $('span[data-price-type="finalPrice"]').attr(
     "data-price-amount"
   );

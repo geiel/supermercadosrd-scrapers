@@ -43,6 +43,39 @@ function detectBlockReason(html: string, title: string): string | null {
   return null;
 }
 
+function normalizeBrowserErrorReason(rawError: unknown): string {
+  const message =
+    rawError instanceof Error
+      ? rawError.message.toLowerCase()
+      : String(rawError).toLowerCase();
+
+  if (message.includes("timeout")) {
+    return "navigation_timeout";
+  }
+
+  if (message.includes("net::err_name_not_resolved")) {
+    return "dns_failed";
+  }
+
+  if (
+    message.includes("net::err_connection") ||
+    message.includes("net::err_internet_disconnected") ||
+    message.includes("net::err_tunnel_connection_failed")
+  ) {
+    return "network_error";
+  }
+
+  if (message.includes("browser") && message.includes("closed")) {
+    return "browser_closed";
+  }
+
+  if (message.includes("failed to launch")) {
+    return "browser_launch_failed";
+  }
+
+  return "request_failed";
+}
+
 async function applyStealthSettings(page: Page): Promise<void> {
   await page.evaluateOnNewDocument(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => false });
@@ -107,19 +140,35 @@ export async function fetchWithBrowserDetailed(
   let browser: Browser | null = null;
 
   try {
-    browser = await launchBrowser();
+    try {
+      browser = await launchBrowser();
+    } catch (error) {
+      return { ok: false, reason: normalizeBrowserErrorReason(error) };
+    }
     const page = await browser.newPage();
 
     await applyStealthSettings(page);
     await page.setViewport({ width: 1920, height: 1080 });
 
+    let statusCode: number | null = null;
     try {
-      await page.goto(url, {
+      const response = await page.goto(url, {
         waitUntil: "domcontentloaded",
         timeout,
       });
+      statusCode = response?.status() ?? null;
     } catch {
       return { ok: false, reason: "navigation_failed" };
+    }
+
+    if (statusCode === 403) {
+      return { ok: false, reason: "blocked" };
+    }
+    if (statusCode === 429) {
+      return { ok: false, reason: "rate_limited" };
+    }
+    if (statusCode && statusCode >= 500) {
+      return { ok: false, reason: `http_${statusCode}` };
     }
 
     try {
@@ -152,8 +201,8 @@ export async function fetchWithBrowserDetailed(
     }
 
     return { ok: true, html };
-  } catch {
-    return { ok: false, reason: "request_failed" };
+  } catch (error) {
+    return { ok: false, reason: normalizeBrowserErrorReason(error) };
   } finally {
     if (browser) {
       await browser.close();
