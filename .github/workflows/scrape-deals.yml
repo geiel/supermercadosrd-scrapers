@@ -33,6 +33,7 @@ jobs:
           POSTGRES_MAX_CONNECTIONS: ${{ secrets.POSTGRES_MAX_CONNECTIONS }}
           REVALIDATE_BASE_URL: ${{ secrets.REVALIDATE_BASE_URL }}
           REVALIDATION_SECRET: ${{ secrets.REVALIDATION_SECRET }}
+          SCRAPER_DEBUG_JUMBO: "true"
         run: |
           pnpm scrape:deals \
             --delay-min 600 \

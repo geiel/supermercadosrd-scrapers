@@ -1,6 +1,27 @@
 import type { Browser, Page } from "puppeteer-core";
 import type { FetchWithRetryConfig, ShopId } from "./types.js";
 
+function isJumboDebugEnabled(): boolean {
+  return (
+    process.env.SCRAPER_DEBUG_JUMBO === "1" ||
+    process.env.SCRAPER_DEBUG_JUMBO === "true" ||
+    process.env.GITHUB_ACTIONS === "true"
+  );
+}
+
+function logJumboDebug(message: string, context?: Record<string, unknown>): void {
+  if (!isJumboDebugEnabled()) {
+    return;
+  }
+
+  if (context) {
+    console.log(`[JUMBO_DEBUG] ${message}`, context);
+    return;
+  }
+
+  console.log(`[JUMBO_DEBUG] ${message}`);
+}
+
 function isProduction(): boolean {
   return process.env.NODE_ENV === "production" || !!process.env.VERCEL;
 }
@@ -137,13 +158,30 @@ export async function fetchWithBrowserDetailed(
   url: string,
   timeout = 60000
 ): Promise<BrowserFetchResult> {
+  const startedAt = Date.now();
   let browser: Browser | null = null;
+  logJumboDebug("browser_fetch_start", {
+    url,
+    timeout,
+    nodeEnv: process.env.NODE_ENV ?? null,
+    githubActions: process.env.GITHUB_ACTIONS ?? null,
+  });
 
   try {
     try {
       browser = await launchBrowser();
+      logJumboDebug("browser_launch_ok", { url });
     } catch (error) {
-      return { ok: false, reason: normalizeBrowserErrorReason(error) };
+      const reason = normalizeBrowserErrorReason(error);
+      logJumboDebug("browser_launch_failed", {
+        url,
+        reason,
+        error:
+          error instanceof Error
+            ? { name: error.name, message: error.message }
+            : String(error),
+      });
+      return { ok: false, reason };
     }
     const page = await browser.newPage();
 
@@ -157,17 +195,22 @@ export async function fetchWithBrowserDetailed(
         timeout,
       });
       statusCode = response?.status() ?? null;
+      logJumboDebug("goto_completed", { url, statusCode });
     } catch {
+      logJumboDebug("goto_failed", { url, reason: "navigation_failed" });
       return { ok: false, reason: "navigation_failed" };
     }
 
     if (statusCode === 403) {
+      logJumboDebug("http_blocked", { url, statusCode });
       return { ok: false, reason: "blocked" };
     }
     if (statusCode === 429) {
+      logJumboDebug("http_rate_limited", { url, statusCode });
       return { ok: false, reason: "rate_limited" };
     }
     if (statusCode && statusCode >= 500) {
+      logJumboDebug("http_server_error", { url, statusCode });
       return { ok: false, reason: `http_${statusCode}` };
     }
 
@@ -191,21 +234,51 @@ export async function fetchWithBrowserDetailed(
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     const [html, title] = await Promise.all([page.content(), page.title()]);
+    logJumboDebug("page_loaded", {
+      url,
+      statusCode,
+      htmlLength: html.length,
+      title,
+      elapsedMs: Date.now() - startedAt,
+    });
     const blockReason = detectBlockReason(html, title);
     if (blockReason) {
+      logJumboDebug("block_reason_detected", {
+        url,
+        statusCode,
+        blockReason,
+        title,
+      });
       return { ok: false, reason: blockReason };
     }
 
     if (!html.trim()) {
+      logJumboDebug("empty_html", { url, statusCode });
       return { ok: false, reason: "empty_html" };
     }
 
+    logJumboDebug("browser_fetch_ok", {
+      url,
+      statusCode,
+      elapsedMs: Date.now() - startedAt,
+    });
     return { ok: true, html };
   } catch (error) {
-    return { ok: false, reason: normalizeBrowserErrorReason(error) };
+    const reason = normalizeBrowserErrorReason(error);
+    logJumboDebug("browser_fetch_exception", {
+      url,
+      reason,
+      error:
+        error instanceof Error
+          ? { name: error.name, message: error.message }
+          : String(error),
+      elapsedMs: Date.now() - startedAt,
+    });
+    return { ok: false, reason };
   } finally {
     if (browser) {
       await browser.close();
+      logJumboDebug("browser_closed", { url });
     }
   }
 }
