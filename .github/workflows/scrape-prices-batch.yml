@@ -6,7 +6,7 @@ on:
 jobs:
   scrape-prices-batch:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
     environment: Production
 
     steps:
