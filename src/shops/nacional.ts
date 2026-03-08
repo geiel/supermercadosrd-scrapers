@@ -23,6 +23,10 @@ export async function scrapeNacionalPrice(
     return error(shopId, "request_failed", true, false);
   }
 
+  if (response.status === 404) {
+    return notFound(shopId, "product_not_found", true);
+  }
+
   const html = await response.text().catch(() => "");
   if (!html) {
     return error(shopId, "empty_html", true, false);
