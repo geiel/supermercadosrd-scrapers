@@ -99,7 +99,7 @@ async function main() {
       and(
         or(
           isNull(productsShopsPrices.updateAt),
-          sql`${productsShopsPrices.updateAt} < now() - INTERVAL '12 HOURS'`
+          sql`${productsShopsPrices.updateAt} < now() - INTERVAL '18 HOURS'`
         ),
         or(
           isNull(productsShopsPrices.hidden),
