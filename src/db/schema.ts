@@ -12,6 +12,7 @@ export const productsShopsPrices = pgTable(
     shopId: integer("shopId").notNull(),
     url: text("url").notNull(),
     api: text("api"),
+    locationId: text("locationId"),
     currentPrice: numeric("currentPrice"),
     regularPrice: numeric("regularPrice"),
     updateAt: timestamp("updateAt", { withTimezone: true }),

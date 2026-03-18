@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { fetchWithRetry, getPricesmartHeaders } from "../http-client.js";
 import { error, notFound, ok } from "../result.js";
+import { getPreferredDoPricesmartLocationPrice } from "../pricesmart-locations.js";
 import type {
   FetchWithRetryConfig,
   ScrapePriceInput,
@@ -37,9 +38,12 @@ const responseSchema = z.object({
 const countryPriceSchema = z.array(
   z.object({
     country: z.string(),
+    club: z.string().optional(),
     value: z.string(),
   })
 );
+
+type PricesmartProductResult = z.infer<typeof responseSchema>["data"]["products"]["results"][number];
 
 function parseCountryPrice(raw: unknown) {
   if (!raw) {
@@ -52,48 +56,73 @@ function parseCountryPrice(raw: unknown) {
       return null;
     }
 
-    return parsed.data.find((price) => price.country === "DO") ?? null;
+    return getPreferredDoPricesmartLocationPrice(parsed.data) ?? null;
   } catch {
     return null;
   }
+}
+
+function getPricesmartSkuCandidates(input: ScrapePriceInput) {
+  const skuCandidates: string[] = [];
+
+  if (input.api?.trim()) {
+    skuCandidates.push(input.api.trim());
+  }
+
+  const urlSku = input.url.match(/\/(\d+)\/?$/)?.[1];
+  if (urlSku && !skuCandidates.includes(urlSku)) {
+    skuCandidates.push(urlSku);
+  }
+
+  return skuCandidates;
 }
 
 export async function scrapePricesmartPrice(
   input: ScrapePriceInput,
   requestConfig?: FetchWithRetryConfig
 ): Promise<ScrapePriceResult> {
-  if (!input.api) {
+  const skuCandidates = getPricesmartSkuCandidates(input);
+  if (skuCandidates.length === 0) {
     return error(shopId, "missing_api", false, true);
   }
 
-  const response = await fetchWithRetry(
-    "https://www.pricesmart.com/api/ct/getProduct",
-    {
-      method: "POST",
-      body: JSON.stringify([
-        { skus: [input.api] },
-        { products: "getProductBySKU" },
-      ]),
-      headers: getPricesmartHeaders(),
-    },
-    requestConfig
-  );
+  let result: PricesmartProductResult | null = null;
 
-  if (!response) {
-    return error(shopId, "request_failed", true, true);
+  for (const sku of skuCandidates) {
+    const response = await fetchWithRetry(
+      "https://www.pricesmart.com/api/ct/getProduct",
+      {
+        method: "POST",
+        body: JSON.stringify([
+          { skus: [sku] },
+          { products: "getProductBySKU" },
+        ]),
+        headers: getPricesmartHeaders(),
+      },
+      requestConfig
+    );
+
+    if (!response) {
+      return error(shopId, "request_failed", true, true);
+    }
+
+    const jsonResponse: unknown = await response.json().catch(() => null);
+    if (!jsonResponse) {
+      return error(shopId, "invalid_json", true, true);
+    }
+
+    const parsed = responseSchema.safeParse(jsonResponse);
+    if (!parsed.success) {
+      return error(shopId, "invalid_payload", false, true);
+    }
+
+    const currentResult = parsed.data.data.products.results[0];
+    if (currentResult) {
+      result = currentResult;
+      break;
+    }
   }
 
-  const jsonResponse: unknown = await response.json().catch(() => null);
-  if (!jsonResponse) {
-    return error(shopId, "invalid_json", true, true);
-  }
-
-  const parsed = responseSchema.safeParse(jsonResponse);
-  if (!parsed.success) {
-    return error(shopId, "invalid_payload", false, true);
-  }
-
-  const result = parsed.data.data.products.results[0];
   if (!result) {
     return notFound(shopId, "product_not_found", true);
   }
@@ -114,5 +143,10 @@ export async function scrapePricesmartPrice(
   );
   const originalPrice = parseCountryPrice(originalPriceRaw?.value);
 
-  return ok(shopId, currentPrice.value, originalPrice?.value ?? null);
+  const regularPrice =
+    originalPrice && originalPrice.club === currentPrice.club
+      ? originalPrice.value
+      : null;
+
+  return ok(shopId, currentPrice.value, regularPrice, currentPrice.club ?? null);
 }

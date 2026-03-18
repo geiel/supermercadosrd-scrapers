@@ -125,6 +125,7 @@ async function main() {
             shopId: productsShopsPrices.shopId,
             url: productsShopsPrices.url,
             api: productsShopsPrices.api,
+            locationId: productsShopsPrices.locationId,
             currentPrice: productsShopsPrices.currentPrice,
             regularPrice: productsShopsPrices.regularPrice,
             updateAt: productsShopsPrices.updateAt,

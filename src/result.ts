@@ -18,7 +18,8 @@ export const SHOP_NAMES: Record<ShopId, ShopName> = {
 export function ok(
   shopId: ShopId,
   currentPrice: string,
-  regularPrice: string | null
+  regularPrice: string | null,
+  locationId: string | null = null
 ): ScrapePriceSuccess {
   return {
     status: "ok",
@@ -26,6 +27,7 @@ export function ok(
     shopName: SHOP_NAMES[shopId],
     currentPrice,
     regularPrice,
+    locationId,
   };
 }
 

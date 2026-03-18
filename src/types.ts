@@ -25,6 +25,7 @@ export type ScrapePriceSuccess = {
   shopName: ShopName;
   currentPrice: string;
   regularPrice: string | null;
+  locationId?: string | null;
 };
 
 export type ScrapePriceNotFound = {

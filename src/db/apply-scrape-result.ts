@@ -1,4 +1,4 @@
-import { and, eq, isNull, ne, or } from "drizzle-orm";
+import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "./client.js";
 import {
   productsPricesHistory,
@@ -14,6 +14,7 @@ export type ShopPriceRow = Pick<
   | "shopId"
   | "url"
   | "api"
+  | "locationId"
   | "currentPrice"
   | "regularPrice"
   | "updateAt"
@@ -95,18 +96,25 @@ export async function applyScrapeResult(
 
   if (
     row.currentPrice !== null &&
-    Number(row.currentPrice) === Number(result.currentPrice)
+    Number(row.currentPrice) === Number(result.currentPrice) &&
+    Number(row.regularPrice ?? 0) === Number(result.regularPrice ?? 0) &&
+    (row.locationId ?? null) === (result.locationId ?? null)
   ) {
     await touchProductPrice(row);
     console.log(`[IGNORE] ${result.shopName} ${logPrefix(row)}`);
     return;
   }
 
+  const currentPriceChanged =
+    row.currentPrice === null ||
+    Number(row.currentPrice) !== Number(result.currentPrice);
+
   const updated = await db
     .update(productsShopsPrices)
     .set({
       currentPrice: result.currentPrice,
       regularPrice: result.regularPrice,
+      locationId: result.locationId ?? null,
       updateAt: new Date(),
     })
     .where(
@@ -115,7 +123,9 @@ export async function applyScrapeResult(
         eq(productsShopsPrices.shopId, row.shopId),
         or(
           isNull(productsShopsPrices.currentPrice),
-          ne(productsShopsPrices.currentPrice, result.currentPrice)
+          ne(productsShopsPrices.currentPrice, result.currentPrice),
+          sql`${productsShopsPrices.regularPrice} IS DISTINCT FROM ${result.regularPrice}`,
+          sql`${productsShopsPrices.locationId} IS DISTINCT FROM ${result.locationId ?? null}`
         )
       )
     )
@@ -129,12 +139,14 @@ export async function applyScrapeResult(
     return;
   }
 
-  await db.insert(productsPricesHistory).values({
-    productId: row.productId,
-    shopId: row.shopId,
-    price: result.currentPrice,
-    createdAt: new Date(),
-  });
+  if (currentPriceChanged) {
+    await db.insert(productsPricesHistory).values({
+      productId: row.productId,
+      shopId: row.shopId,
+      price: result.currentPrice,
+      createdAt: new Date(),
+    });
+  }
 
   await revalidateProduct(row.productId);
   console.log(
