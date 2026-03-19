@@ -61,3 +61,36 @@ export type ScrapeManyOptions = {
     total: number;
   }) => void;
 };
+
+export type ScrapeProductImagesInput = {
+  shopId: ShopId;
+  url: string;
+  api?: string | null;
+};
+
+export type ScrapeProductImagesSuccess = {
+  status: "ok";
+  shopId: ShopId;
+  shopName: ShopName;
+  images: string[];
+};
+
+export type ScrapeProductImagesNotFound = {
+  status: "not_found";
+  shopId: ShopId;
+  shopName: ShopName;
+  reason: string;
+};
+
+export type ScrapeProductImagesError = {
+  status: "error";
+  shopId: ShopId;
+  shopName: ShopName;
+  reason: string;
+  retryable: boolean;
+};
+
+export type ScrapeProductImagesResult =
+  | ScrapeProductImagesSuccess
+  | ScrapeProductImagesNotFound
+  | ScrapeProductImagesError;

@@ -1,4 +1,5 @@
 export { scrapePrice } from "./scrape-price.js";
+export { scrapeProductImages } from "./scrape-product-images.js";
 export { scrapeManyRoundRobin } from "./scrape-many.js";
 
 export {
@@ -16,6 +17,11 @@ export {
 export type {
   FetchWithRetryConfig,
   ScrapeManyOptions,
+  ScrapeProductImagesError,
+  ScrapeProductImagesInput,
+  ScrapeProductImagesNotFound,
+  ScrapeProductImagesResult,
+  ScrapeProductImagesSuccess,
   ScrapePriceError,
   ScrapePriceInput,
   ScrapePriceNotFound,

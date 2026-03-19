@@ -28,6 +28,7 @@
     "build": "tsc -p tsconfig.build.json",
     "clean": "rm -rf dist",
     "scrape:prices-batch": "tsx src/jobs/scrape-prices-batch.ts",
+    "scrape:broken-images-batch": "tsx src/jobs/fix-broken-images-batch.ts",
     "scrape:deals": "tsx src/jobs/scrape-deals.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

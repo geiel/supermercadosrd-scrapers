@@ -19,6 +19,7 @@ Standalone public project for Dominican supermarket scraping.
   - optional product revalidation endpoint call
 - Two production jobs exposed as GitHub `workflow_dispatch`:
   - `scrape:prices-batch` (recommended cadence: every 15 minutes)
+  - `scrape:broken-images-batch` (recommended cadence: every 30-60 minutes)
   - `scrape:deals` (recommended cadence: every 3 hours)
 
 ## Required environment variables
@@ -76,6 +77,29 @@ Behavior:
 - Runs round-robin per shop
 - Saves updates directly to DB
 - Executes `SELECT public.refresh_todays_deals()` at the end
+
+## Job 3: Broken Images Batch (recommended every 30-60 min)
+
+```bash
+pnpm scrape:broken-images-batch
+```
+
+Defaults:
+
+- `--iterations 40`
+- `--products-per-iteration 5`
+- `--concurrency 2`
+- `--delay-min 600`
+- `--delay-max 1200`
+- `--timeout 12000`
+- `--retries 3`
+
+Behavior:
+
+- Reads unresolved rows from `product_broken_images`
+- Resolves the current primary image from `product_images` or `products.image`
+- Re-fetches candidate images from each linked supermarket using the same shop-specific extractors used by the main project
+- If it finds a different image, it updates `products.image`, updates `product_images.primary`, and deletes the related rows from `product_broken_images`
 
 ## GitHub Actions workflows
 
