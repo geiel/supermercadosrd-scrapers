@@ -1,4 +1,4 @@
-name: scrape-deals
+name: scrape-broken-images-batch
 
 on:
   workflow_dispatch:
@@ -7,9 +7,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  scrape-deals:
+  scrape-broken-images-batch:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
     environment: Production
 
     steps:
@@ -33,13 +33,18 @@ jobs:
       - name: Install Chrome for Puppeteer
         run: pnpm exec puppeteer browsers install chrome
 
-      - name: Run deals scraper
+      - name: Run broken images batch scraper
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           POSTGRES_MAX_CONNECTIONS: ${{ secrets.POSTGRES_MAX_CONNECTIONS }}
           REVALIDATE_BASE_URL: ${{ secrets.REVALIDATE_BASE_URL }}
           REVALIDATION_SECRET: ${{ secrets.REVALIDATION_SECRET }}
         run: |
-          pnpm scrape:deals \
+          pnpm scrape:broken-images-batch \
+            --iterations 40 \
+            --products-per-iteration 5 \
+            --concurrency 2 \
             --delay-min 600 \
-            --delay-max 1200
+            --delay-max 1200 \
+            --timeout 12000 \
+            --retries 3
