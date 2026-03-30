@@ -65,6 +65,14 @@ function parseBooleanArg(args: Map<string, string>, key: string) {
   return args.get(key) === "true";
 }
 
+function parseEnvBoolean(value: string | undefined) {
+  if (!value) {
+    return false;
+  }
+
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
 function normalizeNullableText(value: string | null | undefined) {
   return value?.trim().replace(/\/+$/, "") || null;
 }
@@ -473,12 +481,18 @@ async function main() {
   const pageSize = parseNumberArg(args, "--page-size", 100);
   const concurrency = parseNumberArg(args, "--concurrency", 6);
   const force = parseBooleanArg(args, "--force");
+  const skipSchemaEnsure = parseEnvBoolean(process.env.SKIP_SCHEMA_ENSURE);
 
   console.log(
-    `[INFO] Starting Sirena catalog sync limit=${limit} pageSize=${pageSize} concurrency=${concurrency} retryAfterHours=${retryAfterHours} timeoutMs=${timeoutMs} maxRetries=${maxRetries} force=${force}`
+    `[INFO] Starting Sirena catalog sync limit=${limit} pageSize=${pageSize} concurrency=${concurrency} retryAfterHours=${retryAfterHours} timeoutMs=${timeoutMs} maxRetries=${maxRetries} force=${force} skipSchemaEnsure=${skipSchemaEnsure}`
   );
 
-  await Promise.all([ensureRecoverySchema(), ensureSirenaCatalogSchema()]);
+  if (skipSchemaEnsure) {
+    console.log("[INFO] Skipping schema bootstrap");
+  } else {
+    await ensureRecoverySchema();
+    await ensureSirenaCatalogSchema();
+  }
 
   console.log("[INFO] Fetching Sirena top-level categories");
   const [categories, stateMap] = await Promise.all([

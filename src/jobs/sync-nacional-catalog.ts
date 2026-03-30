@@ -67,6 +67,14 @@ function parseBooleanArg(args: Map<string, string>, key: string) {
   return args.get(key) === "true";
 }
 
+function parseEnvBoolean(value: string | undefined) {
+  if (!value) {
+    return false;
+  }
+
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
 function sameDate(left: Date | null | undefined, right: Date | null | undefined) {
   const leftTime = left?.getTime() ?? null;
   const rightTime = right?.getTime() ?? null;
@@ -466,12 +474,18 @@ async function main() {
   const maxRetries = parseNumberArg(args, "--retries", 3);
   const restBatchSize = parseNumberArg(args, "--rest-batch-size", 25);
   const force = parseBooleanArg(args, "--force");
+  const skipSchemaEnsure = parseEnvBoolean(process.env.SKIP_SCHEMA_ENSURE);
 
   console.log(
-    `[INFO] Starting Nacional catalog sync limit=${limit} retryAfterHours=${retryAfterHours} timeoutMs=${timeoutMs} maxRetries=${maxRetries} restBatchSize=${restBatchSize} force=${force}`
+    `[INFO] Starting Nacional catalog sync limit=${limit} retryAfterHours=${retryAfterHours} timeoutMs=${timeoutMs} maxRetries=${maxRetries} restBatchSize=${restBatchSize} force=${force} skipSchemaEnsure=${skipSchemaEnsure}`
   );
-  console.log("[INFO] Ensuring recovery and Nacional catalog schema");
-  await Promise.all([ensureRecoverySchema(), ensureNacionalCatalogSchema()]);
+  if (skipSchemaEnsure) {
+    console.log("[INFO] Skipping schema bootstrap");
+  } else {
+    console.log("[INFO] Ensuring recovery and Nacional catalog schema");
+    await ensureRecoverySchema();
+    await ensureNacionalCatalogSchema();
+  }
   console.log("[INFO] Loading sitemap entries and existing catalog sync state");
 
   const [entries, stateMap] = await Promise.all([

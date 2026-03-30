@@ -34,6 +34,7 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           POSTGRES_MAX_CONNECTIONS: ${{ secrets.POSTGRES_MAX_CONNECTIONS }}
+          SKIP_SCHEMA_ENSURE: "true"
         run: |
           pnpm scrape:sync-sirena-catalog \
             --limit 200 \
