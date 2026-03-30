@@ -467,10 +467,41 @@ async function main() {
   const restBatchSize = parseNumberArg(args, "--rest-batch-size", 25);
   const force = parseBooleanArg(args, "--force");
 
+  console.log(
+    `[INFO] Starting Nacional catalog sync limit=${limit} retryAfterHours=${retryAfterHours} timeoutMs=${timeoutMs} maxRetries=${maxRetries} restBatchSize=${restBatchSize} force=${force}`
+  );
+  console.log("[INFO] Ensuring recovery and Nacional catalog schema");
   await Promise.all([ensureRecoverySchema(), ensureNacionalCatalogSchema()]);
+  console.log("[INFO] Loading sitemap entries and existing catalog sync state");
 
   const [entries, stateMap] = await Promise.all([
-    fetchNacionalSitemapEntries({ timeoutMs, maxRetries }),
+    fetchNacionalSitemapEntries(
+      { timeoutMs, maxRetries },
+      {
+        onProgress: (event) => {
+          switch (event.stage) {
+            case "fetch_index":
+              console.log(`[INFO] Fetching sitemap index url=${event.url}`);
+              break;
+            case "index_loaded":
+              console.log(
+                `[INFO] Sitemap index loaded sitemapFiles=${event.total ?? 0}`
+              );
+              break;
+            case "fetch_sitemap":
+              console.log(
+                `[INFO] Fetching sitemap ${event.current}/${event.total} url=${event.url}`
+              );
+              break;
+            case "sitemap_loaded":
+              console.log(
+                `[INFO] Loaded sitemap ${event.current}/${event.total} entries=${event.entries ?? 0} rejectedForeignUrls=${event.rejectedForeignUrls ?? 0} url=${event.url}`
+              );
+              break;
+          }
+        },
+      }
+    ),
     getCatalogStateMap(),
   ]);
 

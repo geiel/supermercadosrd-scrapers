@@ -7,6 +7,10 @@ import type { NacionalCatalogProduct, NacionalSitemapEntry } from "./types.js";
 const NACIONAL_BASE_URL = "https://supermercadosnacional.com";
 const SITEMAP_INDEX_URL = `${NACIONAL_BASE_URL}/media/sitemap/sitemap.xml`;
 const PRODUCT_LOOKUP_BATCH_SIZE = 25;
+const ALLOWED_NACIONAL_HOSTS = new Set([
+  "supermercadosnacional.com",
+  "www.supermercadosnacional.com",
+]);
 
 type MagentoProductResponse = {
   items?: Array<{
@@ -23,8 +27,12 @@ function parseXml(xml: string) {
   return cheerio.load(xml, { xmlMode: true });
 }
 
-function normalizeCatalogUrl(url: string): string {
+function normalizeCatalogUrl(url: string): string | null {
   const parsed = new URL(url, NACIONAL_BASE_URL);
+  if (!ALLOWED_NACIONAL_HOSTS.has(parsed.host.toLowerCase())) {
+    return null;
+  }
+
   parsed.protocol = "https:";
   parsed.host = "supermercadosnacional.com";
   parsed.search = "";
@@ -55,13 +63,22 @@ function parseSitemapIndex(xml: string): string[] {
     .filter(Boolean);
 }
 
-function parseSitemapEntries(xml: string): NacionalSitemapEntry[] {
+function parseSitemapEntries(xml: string) {
   const $ = parseXml(xml);
   const entries: NacionalSitemapEntry[] = [];
+  const rejectedForeignUrls: string[] = [];
 
   $("url").each((_, element) => {
     const loc = $(element).find("loc").first().text().trim();
     if (!loc) {
+      return;
+    }
+
+    const canonicalUrl = normalizeCatalogUrl(loc);
+    if (!canonicalUrl) {
+      if (rejectedForeignUrls.length < 5) {
+        rejectedForeignUrls.push(loc);
+      }
       return;
     }
 
@@ -74,12 +91,15 @@ function parseSitemapEntries(xml: string): NacionalSitemapEntry[] {
     entries.push({
       sku,
       sitemapUrl: loc,
-      canonicalUrl: normalizeCatalogUrl(loc),
+      canonicalUrl,
       lastmod: parseDate(lastmod),
     });
   });
 
-  return entries;
+  return {
+    entries,
+    rejectedForeignUrls,
+  };
 }
 
 async function fetchText(url: string, requestConfig?: FetchWithRetryConfig) {
@@ -204,17 +224,67 @@ function toCatalogProduct(
 }
 
 export async function fetchNacionalSitemapEntries(
-  requestConfig?: FetchWithRetryConfig
+  requestConfig?: FetchWithRetryConfig,
+  options?: {
+    onProgress?: (event: {
+      stage: "fetch_index" | "index_loaded" | "fetch_sitemap" | "sitemap_loaded";
+      url?: string;
+      current?: number;
+      total?: number;
+      entries?: number;
+      rejectedForeignUrls?: number;
+    }) => void;
+  }
 ): Promise<NacionalSitemapEntry[]> {
+  options?.onProgress?.({
+    stage: "fetch_index",
+    url: SITEMAP_INDEX_URL,
+  });
   const indexXml = await fetchText(SITEMAP_INDEX_URL, requestConfig);
   const sitemapUrls = parseSitemapIndex(indexXml);
+  options?.onProgress?.({
+    stage: "index_loaded",
+    url: SITEMAP_INDEX_URL,
+    total: sitemapUrls.length,
+  });
 
-  const xmlFiles = await Promise.all(
-    sitemapUrls.map((url) => fetchText(url, requestConfig))
-  );
+  const entries: NacionalSitemapEntry[] = [];
+  const rejectedForeignUrls: string[] = [];
 
-  return xmlFiles
-    .flatMap((xml) => parseSitemapEntries(xml))
+  for (let index = 0; index < sitemapUrls.length; index += 1) {
+    const url = sitemapUrls[index];
+    options?.onProgress?.({
+      stage: "fetch_sitemap",
+      url,
+      current: index + 1,
+      total: sitemapUrls.length,
+    });
+
+    const xml = await fetchText(url, requestConfig);
+    const parsed = parseSitemapEntries(xml);
+
+    options?.onProgress?.({
+      stage: "sitemap_loaded",
+      url,
+      current: index + 1,
+      total: sitemapUrls.length,
+      entries: parsed.entries.length,
+      rejectedForeignUrls: parsed.rejectedForeignUrls.length,
+    });
+
+    entries.push(...parsed.entries);
+    rejectedForeignUrls.push(...parsed.rejectedForeignUrls);
+  }
+
+  if (entries.length === 0 && rejectedForeignUrls.length > 0) {
+    throw new Error(
+      `Nacional sitemap contained only foreign-host product URLs. Sample: ${rejectedForeignUrls
+        .slice(0, 3)
+        .join(", ")}`
+    );
+  }
+
+  return entries
     .sort((left, right) => {
       const leftTime = left.lastmod?.getTime() ?? 0;
       const rightTime = right.lastmod?.getTime() ?? 0;
