@@ -1,0 +1,45 @@
+name: scrape-sync-sirena-catalog
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  scrape-sync-sirena-catalog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: Production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8.14.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Sirena catalog sync
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          POSTGRES_MAX_CONNECTIONS: ${{ secrets.POSTGRES_MAX_CONNECTIONS }}
+        run: |
+          pnpm scrape:sync-sirena-catalog \
+            --limit 200 \
+            --retry-hours 24 \
+            --delay-min 300 \
+            --delay-max 800 \
+            --timeout 15000 \
+            --retries 3 \
+            --page-size 100

@@ -8,28 +8,80 @@ import type {
 } from "../types.js";
 
 const shopId = 2;
+const NACIONAL_HOST = "supermercadosnacional.com";
 
-export async function scrapeNacionalPrice(
-  input: ScrapePriceInput,
+export type NacionalPageInspectionResult =
+  | {
+      status: "ok";
+      html: string;
+      finalPrice: string | null;
+      oldPrice: string | null;
+    }
+  | {
+      status: "not_found";
+      reason: string;
+      hide: boolean;
+    }
+  | {
+      status: "error";
+      reason: string;
+      retryable: boolean;
+      hide: boolean;
+    };
+
+export async function inspectNacionalProductPage(
+  url: string,
   requestConfig?: FetchWithRetryConfig
-): Promise<ScrapePriceResult> {
+): Promise<NacionalPageInspectionResult> {
   const response = await fetchWithRetry(
-    input.url,
+    url,
     { headers: getNacionalHeaders() },
     requestConfig
   );
 
   if (!response) {
-    return error(shopId, "request_failed", true, false);
+    return {
+      status: "error",
+      reason: "request_failed",
+      retryable: true,
+      hide: false,
+    };
+  }
+
+  try {
+    const responseHost = new URL(response.url).host;
+    if (responseHost !== NACIONAL_HOST) {
+      return {
+        status: "not_found",
+        reason: "redirected_to_foreign_host",
+        hide: true,
+      };
+    }
+  } catch {
+    return {
+      status: "error",
+      reason: "invalid_response_url",
+      retryable: false,
+      hide: false,
+    };
   }
 
   if (response.status === 404) {
-    return notFound(shopId, "product_not_found", true);
+    return {
+      status: "not_found",
+      reason: "product_not_found",
+      hide: true,
+    };
   }
 
   const html = await response.text().catch(() => "");
   if (!html) {
-    return error(shopId, "empty_html", true, false);
+    return {
+      status: "error",
+      reason: "empty_html",
+      retryable: true,
+      hide: false,
+    };
   }
 
   const $ = cheerio.load(html);
@@ -38,7 +90,20 @@ export async function scrapeNacionalPrice(
     $("title").first().text().trim();
 
   if (title.includes("404 Página no encontrada")) {
-    return notFound(shopId, "product_not_found", true);
+    return {
+      status: "not_found",
+      reason: "product_not_found",
+      hide: true,
+    };
+  }
+
+  if (title.includes("503 backend read error")) {
+    return {
+      status: "error",
+      reason: "backend_503",
+      retryable: true,
+      hide: false,
+    };
   }
 
   const finalPrice = $('span[data-price-type="finalPrice"]').attr(
@@ -48,13 +113,36 @@ export async function scrapeNacionalPrice(
     "data-price-amount"
   );
 
-  if (!finalPrice) {
-    if (title.includes("503 backend read error")) {
-      return error(shopId, "backend_503", true, false);
-    }
+  return {
+    status: "ok",
+    html,
+    finalPrice: finalPrice ?? null,
+    oldPrice: oldPrice ?? null,
+  };
+}
 
+export async function scrapeNacionalPrice(
+  input: ScrapePriceInput,
+  requestConfig?: FetchWithRetryConfig
+): Promise<ScrapePriceResult> {
+  const pageInspection = await inspectNacionalProductPage(input.url, requestConfig);
+
+  if (pageInspection.status === "not_found") {
+    return notFound(shopId, pageInspection.reason, pageInspection.hide);
+  }
+
+  if (pageInspection.status === "error") {
+    return error(
+      shopId,
+      pageInspection.reason,
+      pageInspection.retryable,
+      pageInspection.hide
+    );
+  }
+
+  if (!pageInspection.finalPrice) {
     return error(shopId, "price_not_found", false, false);
   }
 
-  return ok(shopId, finalPrice, oldPrice ?? null);
+  return ok(shopId, pageInspection.finalPrice, pageInspection.oldPrice ?? null);
 }

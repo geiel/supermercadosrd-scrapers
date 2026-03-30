@@ -2,29 +2,27 @@
 
 import type { ScrapePriceResult } from "../types.js";
 import { closeDb } from "../db/client.js";
-import { ensureNacionalCatalogSchema } from "../db/ensure-nacional-catalog-schema.js";
 import { ensureRecoverySchema } from "../db/ensure-recovery-schema.js";
+import { ensureSirenaCatalogSchema } from "../db/ensure-sirena-catalog-schema.js";
 import {
-  fetchNacionalCatalogProducts,
-  fetchNacionalSitemapEntries,
-} from "../nacional-catalog/http.js";
+  fetchSirenaCatalogCandidates,
+  fetchSirenaTopLevelCategories,
+} from "../sirena-catalog/http.js";
 import {
-  findExistingNacionalReferences,
-  findGlobalIdMatches,
+  findExistingSirenaReferences,
+  findSirenaRecoveryKeyMatches,
   getCatalogStateMap,
   upsertCatalogSyncState,
-} from "../nacional-catalog/store.js";
+} from "../sirena-catalog/store.js";
 import type {
-  ExistingNacionalReference,
   ExistingProductMatch,
+  ExistingSirenaReference,
   MatchResolution,
-  NacionalCatalogProduct,
-  NacionalSitemapEntry,
-} from "../nacional-catalog/types.js";
+  SirenaCatalogCandidate,
+} from "../sirena-catalog/types.js";
 import type { HiddenProductRecoveryRow, RecoveryAttempt } from "../recovery/types.js";
-import { error, ok } from "../result.js";
 import { randomDelay } from "../utils.js";
-import { inspectNacionalProductPage } from "../shops/nacional.js";
+import { scrapeSirenaPrice } from "../shops/sirena.js";
 import { upsertRecoveryKey, upsertRecoveryReview } from "../recovery/store.js";
 
 function parseArgs(argv: string[]) {
@@ -67,18 +65,18 @@ function parseBooleanArg(args: Map<string, string>, key: string) {
   return args.get(key) === "true";
 }
 
-function sameDate(left: Date | null | undefined, right: Date | null | undefined) {
-  const leftTime = left?.getTime() ?? null;
-  const rightTime = right?.getTime() ?? null;
-  return leftTime === rightTime;
+function normalizeNullableText(value: string | null | undefined) {
+  return value?.trim().replace(/\/+$/, "") || null;
 }
 
-function shouldProcessEntry(input: {
-  entry: NacionalSitemapEntry;
+function shouldProcessCandidate(input: {
+  candidate: SirenaCatalogCandidate;
   state:
     | {
         canonicalUrl: string;
-        sitemapLastmod: Date | null;
+        api: string;
+        imageUrl: string | null;
+        categoryPath: string | null;
         syncStatus: string;
         lastProcessedAt: Date | null;
       }
@@ -94,39 +92,52 @@ function shouldProcessEntry(input: {
     return true;
   }
 
-  if (input.state.canonicalUrl !== input.entry.canonicalUrl) {
+  if (normalizeNullableText(input.state.canonicalUrl) !== input.candidate.canonicalUrl) {
     return true;
   }
 
-  if (!sameDate(input.state.sitemapLastmod, input.entry.lastmod)) {
+  if (normalizeNullableText(input.state.api) !== input.candidate.api) {
+    return true;
+  }
+
+  if (normalizeNullableText(input.state.imageUrl) !== input.candidate.imageUrl) {
     return true;
   }
 
   if (
-    input.state.syncStatus !== "proposal_ready" &&
-    input.state.syncStatus !== "no_reference_change"
+    normalizeNullableText(input.state.categoryPath) !==
+    normalizeNullableText(input.candidate.categoryPath)
   ) {
-    const lastProcessedAt = input.state.lastProcessedAt?.getTime() ?? 0;
-    const retryWindowMs = input.retryAfterHours * 60 * 60 * 1000;
-    return Date.now() - lastProcessedAt >= retryWindowMs;
+    return true;
   }
 
-  return false;
+  if (
+    input.state.syncStatus === "proposal_ready" ||
+    input.state.syncStatus === "no_reference_change" ||
+    input.state.syncStatus === "ignored_by_category_rule"
+  ) {
+    return false;
+  }
+
+  const lastProcessedAt = input.state.lastProcessedAt?.getTime() ?? 0;
+  const retryWindowMs = input.retryAfterHours * 60 * 60 * 1000;
+  return Date.now() - lastProcessedAt >= retryWindowMs;
 }
 
 function createCandidateEvidence(
-  entry: NacionalSitemapEntry,
-  candidate: NacionalCatalogProduct,
+  candidate: SirenaCatalogCandidate,
   extra: Record<string, unknown> = {}
 ) {
   return {
-    sku: candidate.sku,
+    productId: candidate.productId,
+    friendlyUrl: candidate.friendlyUrl,
     candidateName: candidate.name,
     candidateUrl: candidate.canonicalUrl,
+    candidateApi: candidate.api,
     imageUrl: candidate.imageUrl,
-    eans: candidate.eans,
-    sitemapUrl: entry.sitemapUrl,
-    sitemapLastmod: entry.lastmod?.toISOString() ?? null,
+    sourceCategoryUrl: candidate.sourceCategoryUrl,
+    categoryPath: candidate.categoryPath,
+    topLevelCategorySlug: candidate.topLevelCategorySlug,
     ...extra,
   };
 }
@@ -143,31 +154,40 @@ function toUniqueMatches<T extends { productId: number }>(rows: T[]): T[] {
 }
 
 function resolveMatch(input: {
-  candidate: NacionalCatalogProduct;
-  existingReferences: ExistingNacionalReference[];
-  globalIdMatches: ExistingProductMatch[];
+  candidate: SirenaCatalogCandidate;
+  existingReferences: ExistingSirenaReference[];
+  recoveryKeyMatches: ExistingProductMatch[];
 }): MatchResolution {
   const existingReferences = toUniqueMatches(input.existingReferences);
-  const globalIdMatches = toUniqueMatches(input.globalIdMatches);
-  const globalMatchIds = new Set(globalIdMatches.map((row) => row.productId));
+  const recoveryKeyMatches = toUniqueMatches(input.recoveryKeyMatches);
+  const recoveryKeyIds = new Set(recoveryKeyMatches.map((row) => row.productId));
 
   if (existingReferences.length === 1) {
     const liveReference = existingReferences[0];
-    if (globalIdMatches.length === 1 && !globalMatchIds.has(liveReference.productId)) {
+    if (
+      recoveryKeyMatches.length === 1 &&
+      !recoveryKeyIds.has(liveReference.productId)
+    ) {
       return {
         kind: "conflicting_match_signals",
-        reason: "Existing Nacional reference and barcode match point to different products.",
+        reason: "Existing Sirena reference and recovery key point to different products.",
         evidence: {
           existingReferenceProductId: liveReference.productId,
-          globalIdProductId: globalIdMatches[0]?.productId ?? null,
+          recoveryKeyProductId: recoveryKeyMatches[0]?.productId ?? null,
         },
       };
     }
 
-    const normalizedCurrentUrl = liveReference.url.trim().replace(/\/+$/, "");
-    const normalizedCandidateUrl = input.candidate.canonicalUrl.trim().replace(/\/+$/, "");
+    const currentUrl = normalizeNullableText(liveReference.url);
+    const candidateUrl = normalizeNullableText(input.candidate.canonicalUrl);
+    const currentApi = normalizeNullableText(liveReference.api);
+    const candidateApi = normalizeNullableText(input.candidate.api);
 
-    if (normalizedCurrentUrl === normalizedCandidateUrl && liveReference.hidden !== true) {
+    if (
+      currentUrl === candidateUrl &&
+      currentApi === candidateApi &&
+      liveReference.hidden !== true
+    ) {
       return {
         kind: "no_reference_change",
         matchedProductId: liveReference.productId,
@@ -185,21 +205,20 @@ function resolveMatch(input: {
   }
 
   if (existingReferences.length > 1) {
-    if (globalIdMatches.length === 1) {
+    if (recoveryKeyMatches.length === 1) {
       const matchingReference = existingReferences.find(
-        (row) => row.productId === globalIdMatches[0]?.productId
+        (row) => row.productId === recoveryKeyMatches[0]?.productId
       );
 
       if (matchingReference) {
-        const normalizedCurrentUrl = matchingReference.url
-          .trim()
-          .replace(/\/+$/, "");
-        const normalizedCandidateUrl = input.candidate.canonicalUrl
-          .trim()
-          .replace(/\/+$/, "");
+        const currentUrl = normalizeNullableText(matchingReference.url);
+        const candidateUrl = normalizeNullableText(input.candidate.canonicalUrl);
+        const currentApi = normalizeNullableText(matchingReference.api);
+        const candidateApi = normalizeNullableText(input.candidate.api);
 
         if (
-          normalizedCurrentUrl === normalizedCandidateUrl &&
+          currentUrl === candidateUrl &&
+          currentApi === candidateApi &&
           matchingReference.hidden !== true
         ) {
           return {
@@ -221,35 +240,35 @@ function resolveMatch(input: {
 
     return {
       kind: "ambiguous_existing_reference",
-      reason: "Multiple existing Nacional references match this catalog SKU.",
+      reason: "Multiple existing Sirena references match this catalog product.",
       evidence: {
         existingReferenceProductIds: existingReferences.map((row) => row.productId),
       },
     };
   }
 
-  if (globalIdMatches.length === 1) {
+  if (recoveryKeyMatches.length === 1) {
     return {
       kind: "proposal_target",
-      matchedProductId: globalIdMatches[0].productId,
-      matchStrategy: "barcode",
+      matchedProductId: recoveryKeyMatches[0].productId,
+      matchStrategy: "recovery_key",
       liveReference: null,
     };
   }
 
-  if (globalIdMatches.length > 1) {
+  if (recoveryKeyMatches.length > 1) {
     return {
-      kind: "ambiguous_global_id_match",
-      reason: "Multiple products share the same candidate barcode set.",
+      kind: "ambiguous_recovery_key_match",
+      reason: "Multiple products share the same Sirena recovery key.",
       evidence: {
-        globalIdProductIds: globalIdMatches.map((row) => row.productId),
+        recoveryKeyProductIds: recoveryKeyMatches.map((row) => row.productId),
       },
     };
   }
 
   return {
     kind: "unmatched_catalog_product",
-    reason: "No existing Nacional reference or unique barcode match found.",
+    reason: "No existing Sirena reference or recovery key match found.",
     evidence: {},
   };
 }
@@ -261,7 +280,7 @@ function toRecoveryRow(
     return {
       productId: resolution.liveReference.productId,
       productName: resolution.liveReference.productName,
-      shopId: 2,
+      shopId: 1,
       url: resolution.liveReference.url,
       api: resolution.liveReference.api,
       locationId: resolution.liveReference.locationId,
@@ -275,7 +294,7 @@ function toRecoveryRow(
   return {
     productId: resolution.matchedProductId,
     productName: null,
-    shopId: 2,
+    shopId: 1,
     url: "",
     api: null,
     locationId: null,
@@ -287,12 +306,11 @@ function toRecoveryRow(
 }
 
 function buildAttemptFromScrapeResult(input: {
-  entry: NacionalSitemapEntry;
-  candidate: NacionalCatalogProduct;
+  candidate: SirenaCatalogCandidate;
   resolution: Extract<MatchResolution, { kind: "proposal_target" }>;
   result: ScrapePriceResult;
 }): RecoveryAttempt {
-  const evidence = createCandidateEvidence(input.entry, input.candidate, {
+  const evidence = createCandidateEvidence(input.candidate, {
     matchStrategy: input.resolution.matchStrategy,
     matchedProductId: input.resolution.matchedProductId,
   });
@@ -301,11 +319,11 @@ function buildAttemptFromScrapeResult(input: {
     return {
       status: "verified",
       proposal: {
-        recoveryMethod: "nacional_catalog_sitemap",
-        externalIdType: "sku",
-        externalId: input.candidate.sku,
+        recoveryMethod: "sirena_catalog_category_feed",
+        externalIdType: "productid",
+        externalId: input.candidate.productId,
         proposedUrl: input.candidate.canonicalUrl,
-        proposedApi: null,
+        proposedApi: input.candidate.api,
         proposedLocationId: input.result.locationId ?? null,
         proposedCurrentPrice: input.result.currentPrice,
         proposedRegularPrice: input.result.regularPrice,
@@ -316,9 +334,9 @@ function buildAttemptFromScrapeResult(input: {
 
   return {
     status: "failed",
-    recoveryMethod: "nacional_catalog_sitemap",
-    externalIdType: "sku",
-    externalId: input.candidate.sku,
+    recoveryMethod: "sirena_catalog_category_feed",
+    externalIdType: "productid",
+    externalId: input.candidate.productId,
     reason: input.result.reason,
     evidence: {
       ...evidence,
@@ -329,101 +347,90 @@ function buildAttemptFromScrapeResult(input: {
   };
 }
 
-async function processEntry(input: {
-  entry: NacionalSitemapEntry;
-  candidate: NacionalCatalogProduct;
+async function processCandidate(input: {
+  candidate: SirenaCatalogCandidate;
   timeoutMs: number;
   maxRetries: number;
 }) {
-  const pageInspection = await inspectNacionalProductPage(
-    input.candidate.canonicalUrl,
-    {
-      timeoutMs: input.timeoutMs,
-      maxRetries: input.maxRetries,
-    }
-  );
-
-  if (pageInspection.status === "not_found") {
+  if (input.candidate.ignoredByCategoryRule) {
     await upsertCatalogSyncState({
-      entry: input.entry,
       candidate: input.candidate,
-      syncStatus: "invalid_catalog_url",
-      failureReason: `Nacional candidate URL is invalid (${pageInspection.reason}).`,
-      sourcePayload: createCandidateEvidence(input.entry, input.candidate, {
-        catalogPageReason: pageInspection.reason,
+      syncStatus: "ignored_by_category_rule",
+      sourcePayload: createCandidateEvidence(input.candidate, {
+        ignoreReason:
+          "Product belongs to an excluded Sirena top-level category and did not match an allowed exception.",
       }),
     });
 
     console.log(
-      `[SKIP] sku=${input.candidate.sku} reason=invalid_catalog_url note=${pageInspection.reason}`
+      `[IGNORE] productId=${input.candidate.productId} reason=ignored_by_category_rule`
     );
     return;
   }
 
-  const existingReferences = await findExistingNacionalReferences(input.candidate);
-  const globalIdMatches = await findGlobalIdMatches(input.candidate.eans);
+  const existingReferences = await findExistingSirenaReferences(input.candidate);
+  const recoveryKeyMatches = await findSirenaRecoveryKeyMatches(
+    input.candidate.productId
+  );
   const resolution = resolveMatch({
     candidate: input.candidate,
     existingReferences,
-    globalIdMatches,
+    recoveryKeyMatches,
   });
 
   if (resolution.kind === "no_reference_change") {
     await upsertCatalogSyncState({
-      entry: input.entry,
       candidate: input.candidate,
       syncStatus: "no_reference_change",
       matchedProductId: resolution.matchedProductId,
-      sourcePayload: createCandidateEvidence(input.entry, input.candidate, {
+      sourcePayload: createCandidateEvidence(input.candidate, {
         matchStrategy: resolution.matchStrategy,
       }),
     });
 
     console.log(
-      `[IGNORE] sku=${input.candidate.sku} productId=${resolution.matchedProductId} reason=no_reference_change`
+      `[IGNORE] productId=${input.candidate.productId} productDbId=${resolution.matchedProductId} reason=no_reference_change`
     );
     return;
   }
 
   if (resolution.kind !== "proposal_target") {
     await upsertCatalogSyncState({
-      entry: input.entry,
       candidate: input.candidate,
       syncStatus: resolution.kind,
       failureReason: resolution.reason,
-      sourcePayload: createCandidateEvidence(input.entry, input.candidate, resolution.evidence),
+      sourcePayload: createCandidateEvidence(input.candidate, resolution.evidence),
     });
 
     console.log(
-      `[SKIP] sku=${input.candidate.sku} reason=${resolution.kind} note=${resolution.reason}`
+      `[SKIP] productId=${input.candidate.productId} reason=${resolution.kind} note=${resolution.reason}`
     );
     return;
   }
 
   const recoveryRow = toRecoveryRow(resolution);
-  const scrapeResult =
-    pageInspection.status === "ok"
-      ? pageInspection.finalPrice
-        ? ok(2, pageInspection.finalPrice, pageInspection.oldPrice ?? null)
-        : error(2, "price_not_found", false, false)
-      : error(
-          2,
-          pageInspection.reason,
-          pageInspection.retryable,
-          pageInspection.hide
-        );
+  const scrapeResult = await scrapeSirenaPrice(
+    {
+      shopId: 1,
+      url: input.candidate.canonicalUrl,
+      api: input.candidate.api,
+    },
+    {
+      timeoutMs: input.timeoutMs,
+      maxRetries: input.maxRetries,
+    }
+  );
 
   const attempt = buildAttemptFromScrapeResult({
-    entry: input.entry,
     candidate: input.candidate,
     resolution,
     result: scrapeResult,
   });
 
   const recoveryKey = {
-    externalIdType: "sku" as const,
-    externalId: input.candidate.sku,
-    source: "nacional_catalog_sitemap",
+    externalIdType: "productid" as const,
+    externalId: input.candidate.productId,
+    source: "sirena_catalog_category_feed",
   };
 
   await upsertRecoveryKey(recoveryRow, recoveryKey, {
@@ -432,7 +439,6 @@ async function processEntry(input: {
   await upsertRecoveryReview(recoveryRow, recoveryKey, attempt);
 
   await upsertCatalogSyncState({
-    entry: input.entry,
     candidate: input.candidate,
     syncStatus: attempt.status === "verified" ? "proposal_ready" : "verification_failed",
     matchedProductId: resolution.matchedProductId,
@@ -445,13 +451,13 @@ async function processEntry(input: {
 
   if (attempt.status === "verified") {
     console.log(
-      `[DONE] sku=${input.candidate.sku} productId=${resolution.matchedProductId} proposedUrl=${attempt.proposal.proposedUrl}`
+      `[DONE] productId=${input.candidate.productId} productDbId=${resolution.matchedProductId} proposedUrl=${attempt.proposal.proposedUrl}`
     );
     return;
   }
 
   console.error(
-    `[FAIL] sku=${input.candidate.sku} productId=${resolution.matchedProductId} reason=${attempt.reason}`
+    `[FAIL] productId=${input.candidate.productId} productDbId=${resolution.matchedProductId} reason=${attempt.reason}`
   );
 }
 
@@ -464,21 +470,56 @@ async function main() {
   const delayMaxMs = parseNumberArg(args, "--delay-max", 800);
   const timeoutMs = parseNumberArg(args, "--timeout", 15000);
   const maxRetries = parseNumberArg(args, "--retries", 3);
-  const restBatchSize = parseNumberArg(args, "--rest-batch-size", 25);
+  const pageSize = parseNumberArg(args, "--page-size", 100);
+  const concurrency = parseNumberArg(args, "--concurrency", 6);
   const force = parseBooleanArg(args, "--force");
 
-  await Promise.all([ensureRecoverySchema(), ensureNacionalCatalogSchema()]);
+  console.log(
+    `[INFO] Starting Sirena catalog sync limit=${limit} pageSize=${pageSize} concurrency=${concurrency} retryAfterHours=${retryAfterHours} timeoutMs=${timeoutMs} maxRetries=${maxRetries} force=${force}`
+  );
 
-  const [entries, stateMap] = await Promise.all([
-    fetchNacionalSitemapEntries({ timeoutMs, maxRetries }),
+  await Promise.all([ensureRecoverySchema(), ensureSirenaCatalogSchema()]);
+
+  console.log("[INFO] Fetching Sirena top-level categories");
+  const [categories, stateMap] = await Promise.all([
+    fetchSirenaTopLevelCategories({ timeoutMs, maxRetries }),
     getCatalogStateMap(),
   ]);
 
-  const pendingEntries = entries
-    .filter((entry) =>
-      shouldProcessEntry({
-        entry,
-        state: stateMap.get(entry.sku),
+  console.log(
+    `[INFO] Loaded top-level categories count=${categories.length}. Fetching category feeds...`
+  );
+
+  const candidates = await fetchSirenaCatalogCandidates(categories, {
+    concurrency,
+    pageSize,
+    requestConfig: {
+      timeoutMs,
+      maxRetries,
+    },
+    onCategoryDiscovered: ({ category, totalProducts, totalPages }) => {
+      console.log(
+        `[DISCOVER] category=${category.friendlyUrl} totalProducts=${totalProducts} totalPages=${totalPages}`
+      );
+    },
+    onPageFetched: ({
+      category,
+      page,
+      totalPages,
+      pageProducts,
+      aggregatedCandidates,
+    }) => {
+      console.log(
+        `[FETCH] category=${category.friendlyUrl} page=${page}/${totalPages} pageProducts=${pageProducts} aggregatedCandidates=${aggregatedCandidates}`
+      );
+    },
+  });
+
+  const pendingCandidates = candidates
+    .filter((candidate) =>
+      shouldProcessCandidate({
+        candidate,
+        state: stateMap.get(candidate.productId),
         retryAfterHours,
         force,
       })
@@ -486,57 +527,34 @@ async function main() {
     .slice(0, limit);
 
   console.log(
-    `[INFO] sitemapEntries=${entries.length} pendingEntries=${pendingEntries.length} limit=${limit}`
+    `[INFO] topLevelCategories=${categories.length} catalogCandidates=${candidates.length} pendingCandidates=${pendingCandidates.length} limit=${limit}`
   );
 
-  if (pendingEntries.length === 0) {
+  if (pendingCandidates.length === 0) {
     return;
   }
 
-  const catalogProducts = await fetchNacionalCatalogProducts(
-    pendingEntries,
-    { timeoutMs, maxRetries },
-    restBatchSize
-  );
+  console.time("sync-sirena-catalog");
 
-  console.time("sync-nacional-catalog");
-
-  for (let index = 0; index < pendingEntries.length; index += 1) {
-    const entry = pendingEntries[index];
-    const candidate = catalogProducts.get(entry.sku);
+  for (let index = 0; index < pendingCandidates.length; index += 1) {
+    const candidate = pendingCandidates[index];
 
     console.log(
-      `[INFO] ${index + 1}/${pendingEntries.length} processing sku=${entry.sku}`
+      `[INFO] ${index + 1}/${pendingCandidates.length} processing productId=${candidate.productId} friendlyUrl=${candidate.friendlyUrl}`
     );
 
-    if (!candidate) {
-      await upsertCatalogSyncState({
-        entry,
-        syncStatus: "rest_product_missing",
-        failureReason: "Nacional REST lookup did not return this SKU.",
-        sourcePayload: {
-          sku: entry.sku,
-          sitemapUrl: entry.sitemapUrl,
-          sitemapLastmod: entry.lastmod?.toISOString() ?? null,
-        },
-      });
+    await processCandidate({
+      candidate,
+      timeoutMs,
+      maxRetries,
+    });
 
-      console.error(`[FAIL] sku=${entry.sku} reason=rest_product_missing`);
-    } else {
-      await processEntry({
-        entry,
-        candidate,
-        timeoutMs,
-        maxRetries,
-      });
-    }
-
-    if (index < pendingEntries.length - 1) {
+    if (index < pendingCandidates.length - 1) {
       await randomDelay(delayMinMs, delayMaxMs);
     }
   }
 
-  console.timeEnd("sync-nacional-catalog");
+  console.timeEnd("sync-sirena-catalog");
 }
 
 void main()
@@ -545,7 +563,7 @@ void main()
     process.exit(0);
   })
   .catch(async (error) => {
-    console.error("[ERROR] Nacional catalog sync failed", error);
+    console.error("[ERROR] Sirena catalog sync failed", error);
     await closeDb();
     process.exit(1);
   });

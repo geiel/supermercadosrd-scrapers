@@ -177,6 +177,26 @@ export const nacionalCatalogSyncState = pgTable("nacional_catalog_sync_state", {
   updatedAt: timestamp("updatedAt", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const sirenaCatalogSyncState = pgTable("sirena_catalog_sync_state", {
+  productId: text("productId").primaryKey(),
+  friendlyUrl: text("friendlyUrl").notNull(),
+  canonicalUrl: text("canonicalUrl").notNull(),
+  api: text("api").notNull(),
+  sourceCategoryUrl: text("sourceCategoryUrl").notNull(),
+  categoryPath: text("categoryPath"),
+  topLevelCategorySlug: text("topLevelCategorySlug").notNull(),
+  productName: text("productName"),
+  imageUrl: text("imageUrl"),
+  syncStatus: text("syncStatus").notNull(),
+  matchedProductId: integer("matchedProductId"),
+  failureReason: text("failureReason"),
+  sourcePayload: jsonb("sourcePayload"),
+  lastSeenAt: timestamp("lastSeenAt", { withTimezone: true }).notNull().defaultNow(),
+  lastProcessedAt: timestamp("lastProcessedAt", { withTimezone: true }),
+  createdAt: timestamp("createdAt", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type ProductShopPriceRow = typeof productsShopsPrices.$inferSelect;
 export type ProductBrokenImageRow = typeof productBrokenImages.$inferSelect;
 export type ProductImageRow = typeof productImages.$inferSelect;
@@ -186,3 +206,4 @@ export type ProductShopRecoveryReviewRow =
   typeof productShopRecoveryReviews.$inferSelect;
 export type NacionalCatalogSyncStateRow =
   typeof nacionalCatalogSyncState.$inferSelect;
+export type SirenaCatalogSyncStateRow = typeof sirenaCatalogSyncState.$inferSelect;

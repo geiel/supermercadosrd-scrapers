@@ -60,6 +60,7 @@ export type CatalogSyncStatus =
   | "proposal_ready"
   | "no_reference_change"
   | "verification_failed"
+  | "invalid_catalog_url"
   | "ambiguous_existing_reference"
   | "ambiguous_global_id_match"
   | "conflicting_match_signals"

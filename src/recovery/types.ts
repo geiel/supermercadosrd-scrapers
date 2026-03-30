@@ -1,10 +1,11 @@
 import type { ShopId } from "../types.js";
 
-export type RecoverableShopId = 2 | 3 | 4;
+export type RecoverableShopId = 1 | 2 | 3 | 4;
 
-export type RecoveryExternalIdType = "sku" | "url_tail";
+export type RecoveryExternalIdType = "sku" | "url_tail" | "productid";
 
 export type RecoveryMethod =
+  | "sirena_catalog_category_feed"
   | "nacional_sku_lookup"
   | "nacional_catalog_sitemap"
   | "jumbo_url_tail_search"
@@ -58,5 +59,5 @@ export type RecoverySuccess = {
 export type RecoveryAttempt = RecoveryFailure | RecoverySuccess;
 
 export function isRecoverableShopId(shopId: ShopId): shopId is RecoverableShopId {
-  return shopId === 2 || shopId === 3 || shopId === 4;
+  return shopId === 1 || shopId === 2 || shopId === 3 || shopId === 4;
 }

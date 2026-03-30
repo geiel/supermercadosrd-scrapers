@@ -20,6 +20,7 @@ Standalone public project for Dominican supermarket scraping.
 - Two production jobs exposed as GitHub `workflow_dispatch`:
   - `scrape:prices-batch` (recommended cadence: every 15 minutes)
   - `scrape:sync-nacional-catalog` (recommended cadence: every 6-12 hours)
+  - `scrape:sync-sirena-catalog` (recommended cadence: every 6-12 hours)
   - `scrape:recover-hidden-products` (recommended cadence: every 6-12 hours)
   - `scrape:broken-images-batch` (recommended cadence: every 30-60 minutes)
   - `scrape:deals` (recommended cadence: every 3 hours)
@@ -119,6 +120,7 @@ pnpm scrape:sync-nacional-catalog
 Defaults:
 
 - `--limit 200`
+- `--concurrency 6`
 - `--retry-hours 24`
 - `--delay-min 300`
 - `--delay-max 800`
@@ -140,6 +142,42 @@ Behavior:
 - Does not auto-apply URL changes directly
 
 ## Job 5: Broken Images Batch (recommended every 30-60 min)
+
+## Job 5: Sirena Catalog Sync (recommended every 6-12 hours)
+
+```bash
+pnpm scrape:sync-sirena-catalog
+```
+
+Defaults:
+
+- `--limit 200`
+- `--retry-hours 24`
+- `--delay-min 300`
+- `--delay-max 800`
+- `--timeout 15000`
+- `--retries 3`
+- `--page-size 100`
+
+Behavior:
+
+- Auto-creates one operational table if it does not exist yet:
+  - `sirena_catalog_sync_state`
+- Reads Sirena's live category tree from `product/categories`
+- Crawls paginated top-level category feeds and dedupes by Sirena `productid`
+- Logs category/page crawl progress while discovery is running
+- Ignores products under `hogar-y-electrodomesticos` and `ropa`, except
+  battery-like exceptions such as Duracell/Energizer/Rayovac products
+- Matches candidates against existing local products using:
+  - existing Sirena references in `products_shops_prices`
+  - previously learned Sirena recovery keys by `productid`
+- Verifies matched candidates through Sirena's product detail API
+- Writes review proposals into `product_shop_recovery_reviews`
+- Records unresolved items in `sirena_catalog_sync_state` so they can be
+  reviewed from the shared catalog intake flow in the main app
+- Does not auto-apply URL changes directly
+
+## Job 6: Broken Images Batch (recommended every 30-60 min)
 
 ```bash
 pnpm scrape:broken-images-batch
@@ -168,6 +206,7 @@ Behavior:
 - `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-deals.yml`
 - `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-recover-hidden-products.yml`
 - `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-sync-nacional-catalog.yml`
+- `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-sync-sirena-catalog.yml`
   - All are `workflow_dispatch` only (no internal cron schedule)
 
 These workflows expect `DATABASE_URL` in repository secrets.
@@ -184,3 +223,5 @@ These workflows expect `DATABASE_URL` in repository secrets.
 - Nacional catalog sync only creates review proposals for products that can be
   matched to an existing app product. Unmatched catalog items are recorded in
   sync state but are not reviewable from the admin page yet.
+- Sirena catalog sync stores unresolved items in `sirena_catalog_sync_state`
+  and exposes them through the same intake review flow used for Nacional.

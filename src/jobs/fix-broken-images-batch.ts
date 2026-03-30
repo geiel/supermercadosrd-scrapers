@@ -7,7 +7,7 @@ import { productImages, productsShopsPrices } from "../db/schema.js";
 import { getComparableImageKey, normalizeString } from "../image-utils.js";
 import { scrapeProductImages } from "../scrape-product-images.js";
 import type { FetchWithRetryConfig, ShopId } from "../types.js";
-import { randomDelay } from "../utils.js";
+import { mapWithConcurrency, randomDelay } from "../utils.js";
 
 type PendingBrokenImageCandidate = {
   brokenImageId: number;
@@ -338,39 +338,6 @@ function pickReplacementImage(
   return getComparableImageKey(primaryImageUrl) !== reportedImageKey
     ? primaryImageUrl
     : null;
-}
-
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T) => Promise<R>
-) {
-  if (items.length === 0) {
-    return [];
-  }
-
-  const safeConcurrency = Math.max(1, Math.min(concurrency, items.length));
-  const results = new Array<R>(items.length);
-  let cursor = 0;
-
-  async function runWorker() {
-    while (true) {
-      const index = cursor;
-      cursor += 1;
-
-      if (index >= items.length) {
-        return;
-      }
-
-      results[index] = await worker(items[index]);
-    }
-  }
-
-  await Promise.all(
-    Array.from({ length: safeConcurrency }, () => runWorker())
-  );
-
-  return results;
 }
 
 async function processBrokenImageCandidate(
