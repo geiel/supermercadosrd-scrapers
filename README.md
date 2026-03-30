@@ -136,9 +136,10 @@ Behavior:
 
 - `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-prices-batch.yml`
 - `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-deals.yml`
-  - Both are `workflow_dispatch` only (no internal cron schedule)
+- `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-recover-hidden-products.yml`
+  - All are `workflow_dispatch` only (no internal cron schedule)
 
-Both workflows expect `DATABASE_URL` in repository secrets.
+These workflows expect `DATABASE_URL` in repository secrets.
 
 ## Notes
 
