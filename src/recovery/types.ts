@@ -6,6 +6,7 @@ export type RecoveryExternalIdType = "sku" | "url_tail";
 
 export type RecoveryMethod =
   | "nacional_sku_lookup"
+  | "nacional_catalog_sitemap"
   | "jumbo_url_tail_search"
   | "plaza_lama_sku_lookup";
 

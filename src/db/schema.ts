@@ -16,6 +16,18 @@ export const products = pgTable("products", {
   deleted: boolean("deleted"),
 });
 
+export const productsGlobalIds = pgTable("products_global_ids", {
+  id: integer("id").primaryKey(),
+  productId: integer("productId").notNull(),
+  sourceShopId: integer("sourceShopId").notNull(),
+  type: text("type").notNull(),
+  value: text("value").notNull(),
+  rawValue: text("rawValue").notNull(),
+  sourceRef: text("sourceRef"),
+  createdAt: timestamp("createdAt", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true }).notNull(),
+});
+
 export const productImages = pgTable(
   "product_images",
   {
@@ -147,6 +159,24 @@ export const productShopRecoveryReviews = pgTable(
   ]
 );
 
+export const nacionalCatalogSyncState = pgTable("nacional_catalog_sync_state", {
+  sku: text("sku").primaryKey(),
+  sitemapUrl: text("sitemapUrl").notNull(),
+  canonicalUrl: text("canonicalUrl").notNull(),
+  sitemapLastmod: timestamp("sitemapLastmod", { withTimezone: true }),
+  productName: text("productName"),
+  imageUrl: text("imageUrl"),
+  eans: jsonb("eans"),
+  syncStatus: text("syncStatus").notNull(),
+  matchedProductId: integer("matchedProductId"),
+  failureReason: text("failureReason"),
+  sourcePayload: jsonb("sourcePayload"),
+  lastSeenAt: timestamp("lastSeenAt", { withTimezone: true }).notNull().defaultNow(),
+  lastProcessedAt: timestamp("lastProcessedAt", { withTimezone: true }),
+  createdAt: timestamp("createdAt", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type ProductShopPriceRow = typeof productsShopsPrices.$inferSelect;
 export type ProductBrokenImageRow = typeof productBrokenImages.$inferSelect;
 export type ProductImageRow = typeof productImages.$inferSelect;
@@ -154,3 +184,5 @@ export type ProductImageUpdateReportRow = typeof productImageUpdateReports.$infe
 export type ProductShopRecoveryKeyRow = typeof productShopRecoveryKeys.$inferSelect;
 export type ProductShopRecoveryReviewRow =
   typeof productShopRecoveryReviews.$inferSelect;
+export type NacionalCatalogSyncStateRow =
+  typeof nacionalCatalogSyncState.$inferSelect;

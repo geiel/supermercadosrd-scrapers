@@ -19,6 +19,7 @@ Standalone public project for Dominican supermarket scraping.
   - optional product revalidation endpoint call
 - Two production jobs exposed as GitHub `workflow_dispatch`:
   - `scrape:prices-batch` (recommended cadence: every 15 minutes)
+  - `scrape:sync-nacional-catalog` (recommended cadence: every 6-12 hours)
   - `scrape:recover-hidden-products` (recommended cadence: every 6-12 hours)
   - `scrape:broken-images-batch` (recommended cadence: every 30-60 minutes)
   - `scrape:deals` (recommended cadence: every 3 hours)
@@ -109,7 +110,36 @@ Behavior:
 - Writes the result into `product_shop_recovery_reviews`
 - Does not update `products_shops_prices` directly
 
-## Job 4: Broken Images Batch (recommended every 30-60 min)
+## Job 4: Nacional Catalog Sync (recommended every 6-12 hours)
+
+```bash
+pnpm scrape:sync-nacional-catalog
+```
+
+Defaults:
+
+- `--limit 200`
+- `--retry-hours 24`
+- `--delay-min 300`
+- `--delay-max 800`
+- `--timeout 15000`
+- `--retries 3`
+- `--rest-batch-size 25`
+
+Behavior:
+
+- Auto-creates one operational table if it does not exist yet:
+  - `nacional_catalog_sync_state`
+- Reads Nacional's live sitemap and diffs entries by SKU + `lastmod`
+- Enriches changed SKUs through Nacional's public Magento REST lookup
+- Matches candidates against existing local products using:
+  - existing Nacional references in `products_shops_prices`
+  - unique barcodes from `products_global_ids`
+- Writes review proposals into `product_shop_recovery_reviews`
+- These proposals are intended for `/admin/product-recovery-reviews` in the main app
+- Does not auto-apply URL changes directly
+
+## Job 5: Broken Images Batch (recommended every 30-60 min)
 
 ```bash
 pnpm scrape:broken-images-batch
@@ -137,6 +167,7 @@ Behavior:
 - `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-prices-batch.yml`
 - `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-deals.yml`
 - `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-recover-hidden-products.yml`
+- `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-sync-nacional-catalog.yml`
   - All are `workflow_dispatch` only (no internal cron schedule)
 
 These workflows expect `DATABASE_URL` in repository secrets.
@@ -150,3 +181,6 @@ These workflows expect `DATABASE_URL` in repository secrets.
   API and will unhide them on a successful scrape.
 - Hidden product recovery ignores Sirena for now because a stable Sirena `productid`
   is not stored in this project yet.
+- Nacional catalog sync only creates review proposals for products that can be
+  matched to an existing app product. Unmatched catalog items are recorded in
+  sync state but are not reviewable from the admin page yet.
