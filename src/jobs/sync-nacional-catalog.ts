@@ -509,7 +509,7 @@ async function main() {
               break;
             case "sitemap_loaded":
               console.log(
-                `[INFO] Loaded sitemap ${event.current}/${event.total} entries=${event.entries ?? 0} rejectedForeignUrls=${event.rejectedForeignUrls ?? 0} url=${event.url}`
+                `[INFO] Loaded sitemap ${event.current}/${event.total} entries=${event.entries ?? 0} foreignHostUrls=${event.foreignHostUrls ?? 0} url=${event.url}`
               );
               break;
           }

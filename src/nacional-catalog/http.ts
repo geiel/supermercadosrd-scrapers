@@ -7,10 +7,7 @@ import type { NacionalCatalogProduct, NacionalSitemapEntry } from "./types.js";
 const NACIONAL_BASE_URL = "https://supermercadosnacional.com";
 const SITEMAP_INDEX_URL = `${NACIONAL_BASE_URL}/media/sitemap/sitemap.xml`;
 const PRODUCT_LOOKUP_BATCH_SIZE = 25;
-const ALLOWED_NACIONAL_HOSTS = new Set([
-  "supermercadosnacional.com",
-  "www.supermercadosnacional.com",
-]);
+const ALLOWED_NACIONAL_HOSTS = new Set(["supermercadosnacional.com", "www.supermercadosnacional.com"]);
 
 type MagentoProductResponse = {
   items?: Array<{
@@ -27,18 +24,22 @@ function parseXml(xml: string) {
   return cheerio.load(xml, { xmlMode: true });
 }
 
-function normalizeCatalogUrl(url: string): string | null {
+function normalizeCatalogUrl(url: string): string {
   const parsed = new URL(url, NACIONAL_BASE_URL);
-  if (!ALLOWED_NACIONAL_HOSTS.has(parsed.host.toLowerCase())) {
-    return null;
-  }
-
   parsed.protocol = "https:";
   parsed.host = "supermercadosnacional.com";
   parsed.search = "";
   parsed.hash = "";
   parsed.pathname = parsed.pathname.replace(/\/+$/, "");
   return parsed.toString();
+}
+
+function isForeignCatalogHost(url: string) {
+  try {
+    return !ALLOWED_NACIONAL_HOSTS.has(new URL(url, NACIONAL_BASE_URL).host.toLowerCase());
+  } catch {
+    return false;
+  }
 }
 
 function parseDate(value: string): Date | null {
@@ -66,7 +67,7 @@ function parseSitemapIndex(xml: string): string[] {
 function parseSitemapEntries(xml: string) {
   const $ = parseXml(xml);
   const entries: NacionalSitemapEntry[] = [];
-  const rejectedForeignUrls: string[] = [];
+  let foreignHostUrls = 0;
 
   $("url").each((_, element) => {
     const loc = $(element).find("loc").first().text().trim();
@@ -74,12 +75,8 @@ function parseSitemapEntries(xml: string) {
       return;
     }
 
-    const canonicalUrl = normalizeCatalogUrl(loc);
-    if (!canonicalUrl) {
-      if (rejectedForeignUrls.length < 5) {
-        rejectedForeignUrls.push(loc);
-      }
-      return;
+    if (isForeignCatalogHost(loc)) {
+      foreignHostUrls += 1;
     }
 
     const sku = extractTrailingSku(loc);
@@ -91,14 +88,14 @@ function parseSitemapEntries(xml: string) {
     entries.push({
       sku,
       sitemapUrl: loc,
-      canonicalUrl,
+      canonicalUrl: normalizeCatalogUrl(loc),
       lastmod: parseDate(lastmod),
     });
   });
 
   return {
     entries,
-    rejectedForeignUrls,
+    foreignHostUrls,
   };
 }
 
@@ -232,7 +229,7 @@ export async function fetchNacionalSitemapEntries(
       current?: number;
       total?: number;
       entries?: number;
-      rejectedForeignUrls?: number;
+      foreignHostUrls?: number;
     }) => void;
   }
 ): Promise<NacionalSitemapEntry[]> {
@@ -249,7 +246,6 @@ export async function fetchNacionalSitemapEntries(
   });
 
   const entries: NacionalSitemapEntry[] = [];
-  const rejectedForeignUrls: string[] = [];
 
   for (let index = 0; index < sitemapUrls.length; index += 1) {
     const url = sitemapUrls[index];
@@ -269,19 +265,10 @@ export async function fetchNacionalSitemapEntries(
       current: index + 1,
       total: sitemapUrls.length,
       entries: parsed.entries.length,
-      rejectedForeignUrls: parsed.rejectedForeignUrls.length,
+      foreignHostUrls: parsed.foreignHostUrls,
     });
 
     entries.push(...parsed.entries);
-    rejectedForeignUrls.push(...parsed.rejectedForeignUrls);
-  }
-
-  if (entries.length === 0 && rejectedForeignUrls.length > 0) {
-    throw new Error(
-      `Nacional sitemap contained only foreign-host product URLs. Sample: ${rejectedForeignUrls
-        .slice(0, 3)
-        .join(", ")}`
-    );
   }
 
   return entries
