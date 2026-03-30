@@ -1,4 +1,13 @@
-import { boolean, integer, numeric, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  integer,
+  jsonb,
+  numeric,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+} from "drizzle-orm/pg-core";
 
 export const products = pgTable("products", {
   id: integer("id").primaryKey(),
@@ -72,7 +81,76 @@ export const todaysDeals = pgTable("todays_deals", {
   productId: integer("productId").primaryKey(),
 });
 
+export const productShopRecoveryKeys = pgTable(
+  "product_shop_recovery_keys",
+  {
+    productId: integer("productId").notNull(),
+    shopId: integer("shopId").notNull(),
+    externalIdType: text("externalIdType").notNull(),
+    externalId: text("externalId").notNull(),
+    source: text("source").notNull(),
+    discoveredAt: timestamp("discoveredAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastVerifiedAt: timestamp("lastVerifiedAt", { withTimezone: true }),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.productId, table.shopId],
+      name: "product_shop_recovery_keys_productId_shopId_pk",
+    }),
+  ]
+);
+
+export const productShopRecoveryReviews = pgTable(
+  "product_shop_recovery_reviews",
+  {
+    productId: integer("productId").notNull(),
+    shopId: integer("shopId").notNull(),
+    productName: text("productName"),
+    shopName: text("shopName").notNull(),
+    currentUrl: text("currentUrl").notNull(),
+    currentApi: text("currentApi"),
+    currentLocationId: text("currentLocationId"),
+    currentStoredPrice: numeric("currentStoredPrice"),
+    currentStoredRegularPrice: numeric("currentStoredRegularPrice"),
+    currentHidden: boolean("currentHidden"),
+    externalIdType: text("externalIdType"),
+    externalId: text("externalId"),
+    keySource: text("keySource"),
+    recoveryMethod: text("recoveryMethod"),
+    proposalStatus: text("proposalStatus"),
+    verificationStatus: text("verificationStatus").notNull(),
+    proposedUrl: text("proposedUrl"),
+    proposedApi: text("proposedApi"),
+    proposedLocationId: text("proposedLocationId"),
+    proposedCurrentPrice: numeric("proposedCurrentPrice"),
+    proposedRegularPrice: numeric("proposedRegularPrice"),
+    proposedHidden: boolean("proposedHidden"),
+    proposalEvidence: jsonb("proposalEvidence"),
+    failureReason: text("failureReason"),
+    lastAttemptStatus: text("lastAttemptStatus").notNull(),
+    lastAttemptReason: text("lastAttemptReason"),
+    lastAttemptEvidence: jsonb("lastAttemptEvidence"),
+    lastAttemptedAt: timestamp("lastAttemptedAt", { withTimezone: true }).notNull(),
+    reviewedAt: timestamp("reviewedAt", { withTimezone: true }),
+    reviewNote: text("reviewNote"),
+    createdAt: timestamp("createdAt", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.productId, table.shopId],
+      name: "product_shop_recovery_reviews_productId_shopId_pk",
+    }),
+  ]
+);
+
 export type ProductShopPriceRow = typeof productsShopsPrices.$inferSelect;
 export type ProductBrokenImageRow = typeof productBrokenImages.$inferSelect;
 export type ProductImageRow = typeof productImages.$inferSelect;
 export type ProductImageUpdateReportRow = typeof productImageUpdateReports.$inferSelect;
+export type ProductShopRecoveryKeyRow = typeof productShopRecoveryKeys.$inferSelect;
+export type ProductShopRecoveryReviewRow =
+  typeof productShopRecoveryReviews.$inferSelect;

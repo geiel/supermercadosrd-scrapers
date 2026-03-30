@@ -19,6 +19,7 @@ Standalone public project for Dominican supermarket scraping.
   - optional product revalidation endpoint call
 - Two production jobs exposed as GitHub `workflow_dispatch`:
   - `scrape:prices-batch` (recommended cadence: every 15 minutes)
+  - `scrape:recover-hidden-products` (recommended cadence: every 6-12 hours)
   - `scrape:broken-images-batch` (recommended cadence: every 30-60 minutes)
   - `scrape:deals` (recommended cadence: every 3 hours)
 
@@ -78,7 +79,37 @@ Behavior:
 - Saves updates directly to DB
 - Executes `SELECT public.refresh_todays_deals()` at the end
 
-## Job 3: Broken Images Batch (recommended every 30-60 min)
+## Job 3: Hidden Product Recovery (recommended every 6-12 hours)
+
+```bash
+pnpm scrape:recover-hidden-products
+```
+
+Defaults:
+
+- `--products-per-shop 5`
+- `--delay-min 600`
+- `--delay-max 1200`
+- `--timeout 10000`
+- `--retries 3`
+- optional `--shop-id 2,3,4` filter to limit the recovery run to specific shops
+
+Behavior:
+
+- Auto-creates two review-oriented tables if they do not exist yet:
+  - `product_shop_recovery_keys`
+  - `product_shop_recovery_reviews`
+- Reads hidden rows from `products_shops_prices`
+- Only targets shops with a stable public recovery key today:
+  - Nacional: `sku`
+  - Jumbo: numeric URL tail
+  - Plaza Lama: `sku`
+- Tries to recover the latest working URL/API using the stored external ID
+- Verifies the recovered candidate by scraping it again
+- Writes the result into `product_shop_recovery_reviews`
+- Does not update `products_shops_prices` directly
+
+## Job 4: Broken Images Batch (recommended every 30-60 min)
 
 ```bash
 pnpm scrape:broken-images-batch
@@ -113,3 +144,8 @@ Both workflows expect `DATABASE_URL` in repository secrets.
 
 - This project intentionally excludes admin/business UI logic.
 - Jumbo uses browser automation to bypass Cloudflare.
+- Bravo is intentionally excluded from hidden-product recovery because the
+  normal prices batch already retries hidden Bravo rows by direct `idArticulo`
+  API and will unhide them on a successful scrape.
+- Hidden product recovery ignores Sirena for now because a stable Sirena `productid`
+  is not stored in this project yet.
