@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { dedupeComparableUrls, normalizeNacionalImageUrl } from "../image-utils.js";
-import { fetchWithRetry } from "../http-client.js";
+import { fetchWithRetryDetailed } from "../http-client.js";
 import type { FetchWithRetryConfig } from "../types.js";
 
 const MERCA_JUMBO_API_URL_ENV = "MERCA_JUMBO_API_URL";
@@ -94,6 +94,11 @@ export type MercaJumboProductLookupResult =
         | "missing_api"
         | "missing_store_code"
         | "request_failed"
+        | "timeout"
+        | "dns_failed"
+        | "network_error"
+        | "request_aborted"
+        | "tls_error"
         | "invalid_payload"
         | `http_${number}`;
       retryable: boolean;
@@ -172,7 +177,7 @@ export async function fetchMercaJumboProductBySku(
     };
   }
 
-  const response = await fetchWithRetry(
+  const { response, failureReason } = await fetchWithRetryDetailed(
     apiUrl,
     {
       method: "POST",
@@ -194,7 +199,7 @@ export async function fetchMercaJumboProductBySku(
   if (!response) {
     return {
       status: "error",
-      reason: "request_failed",
+      reason: failureReason ?? "request_failed",
       retryable: true,
     };
   }

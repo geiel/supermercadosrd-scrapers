@@ -29,11 +29,13 @@ export async function scrapeMercaJumboPrice(
   }
 
   if (productLookup.status === "error") {
+    const shouldHide = productLookup.reason === "timeout";
+
     return error(
       shopId,
       productLookup.reason,
       productLookup.retryable,
-      false
+      shouldHide
     );
   }
 

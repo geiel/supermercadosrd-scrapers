@@ -1,6 +1,15 @@
 import type { Browser, Page } from "puppeteer-core";
 import type { FetchWithRetryConfig, ShopId } from "./types.js";
 
+export type FetchFailureReason =
+  | "request_failed"
+  | "timeout"
+  | "dns_failed"
+  | "network_error"
+  | "request_aborted"
+  | "tls_error"
+  | `http_${number}`;
+
 function isProduction(): boolean {
   return process.env.NODE_ENV === "production" || !!process.env.VERCEL;
 }
@@ -75,6 +84,65 @@ function normalizeBrowserErrorReason(rawError: unknown): string {
 
   if (message.includes("could not find chrome")) {
     return "browser_not_installed";
+  }
+
+  return "request_failed";
+}
+
+function normalizeFetchErrorReason(rawError: unknown): FetchFailureReason {
+  const parts: string[] = [];
+
+  if (rawError instanceof Error) {
+    if (rawError.name) {
+      parts.push(rawError.name);
+    }
+
+    if (rawError.message) {
+      parts.push(rawError.message);
+    }
+
+    if ("cause" in rawError && rawError.cause) {
+      parts.push(String(rawError.cause));
+    }
+  } else {
+    parts.push(String(rawError));
+  }
+
+  const message = parts.join(" ").toLowerCase();
+
+  if (
+    message.includes("timeouterror") ||
+    message.includes("timeout") ||
+    message.includes("aborted due to timeout")
+  ) {
+    return "timeout";
+  }
+
+  if (
+    message.includes("enotfound") ||
+    message.includes("eai_again") ||
+    message.includes("err_name_not_resolved")
+  ) {
+    return "dns_failed";
+  }
+
+  if (
+    message.includes("econnrefused") ||
+    message.includes("econnreset") ||
+    message.includes("ehostunreach") ||
+    message.includes("enetunreach") ||
+    message.includes("socket hang up") ||
+    message.includes("fetch failed")
+  ) {
+    return "network_error";
+  }
+
+  if (message.includes("aborterror") || message.includes("aborted")) {
+    return "request_aborted";
+  }
+
+  if (message.includes("certificate") || message.includes("ssl")) {
+    return "tls_error";
   }
 
   return "request_failed";
@@ -367,11 +435,21 @@ export function getHeadersByShopId(shopId: ShopId): Record<string, string> {
   }
 }
 
-export async function fetchWithRetry(
+export type FetchWithRetryDetailedResult =
+  | {
+      response: Response;
+      failureReason: null;
+    }
+  | {
+      response: null;
+      failureReason: FetchFailureReason;
+    };
+
+export async function fetchWithRetryDetailed(
   url: string,
   options: RequestInit = {},
   config: FetchWithRetryConfig = {}
-): Promise<Response | null> {
+): Promise<FetchWithRetryDetailedResult> {
   const { maxRetries = 3, timeoutMs = 10000 } = config;
   const attempts = Math.max(1, maxRetries);
 
@@ -384,7 +462,10 @@ export async function fetchWithRetry(
 
       if (response.status === 429 || response.status === 503) {
         if (attempt === attempts - 1) {
-          return null;
+          return {
+            response: null,
+            failureReason: `http_${response.status}`,
+          };
         }
 
         const waitTime = Math.pow(2, attempt) * 5000 + Math.random() * 2000;
@@ -392,10 +473,16 @@ export async function fetchWithRetry(
         continue;
       }
 
-      return response;
-    } catch {
+      return {
+        response,
+        failureReason: null,
+      };
+    } catch (error) {
       if (attempt === attempts - 1) {
-        return null;
+        return {
+          response: null,
+          failureReason: normalizeFetchErrorReason(error),
+        };
       }
 
       const waitTime = Math.pow(2, attempt) * 2000 + Math.random() * 1000;
@@ -403,5 +490,17 @@ export async function fetchWithRetry(
     }
   }
 
-  return null;
+  return {
+    response: null,
+    failureReason: "request_failed",
+  };
+}
+
+export async function fetchWithRetry(
+  url: string,
+  options: RequestInit = {},
+  config: FetchWithRetryConfig = {}
+): Promise<Response | null> {
+  const result = await fetchWithRetryDetailed(url, options, config);
+  return result.response;
 }
