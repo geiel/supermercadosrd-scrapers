@@ -5,6 +5,7 @@ import type {
 } from "./types.js";
 import { scrapeBravoImages } from "./shops/bravo-images.js";
 import { scrapeJumboImages } from "./shops/jumbo-images.js";
+import { scrapeMercaJumboImages } from "./shops/merca-jumbo-images.js";
 import { scrapeNacionalImages } from "./shops/nacional-images.js";
 import { scrapePlazaLamaImages } from "./shops/plaza-lama-images.js";
 import { scrapePricesmartImages } from "./shops/pricesmart-images.js";
@@ -21,6 +22,8 @@ export async function scrapeProductImages(
       return scrapeNacionalImages(input, requestConfig);
     case 3:
       return scrapeJumboImages(input);
+    case 7:
+      return scrapeMercaJumboImages(input, requestConfig);
     case 4:
       return scrapePlazaLamaImages(input, requestConfig);
     case 5:

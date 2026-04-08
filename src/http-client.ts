@@ -354,6 +354,8 @@ export function getHeadersByShopId(shopId: ShopId): Record<string, string> {
       return getNacionalHeaders();
     case 3:
       return getJumboHeaders();
+    case 7:
+      return getNacionalHeaders();
     case 4:
       return getPlazaLamaHeaders();
     case 5:

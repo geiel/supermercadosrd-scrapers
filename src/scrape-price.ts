@@ -1,6 +1,7 @@
 import {
   scrapeBravoPrice,
   scrapeJumboPrice,
+  scrapeMercaJumboPrice,
   scrapeNacionalPrice,
   scrapePlazaLamaPrice,
   scrapePricesmartPrice,
@@ -23,6 +24,8 @@ export async function scrapePrice(
       return scrapeNacionalPrice(input, requestConfig);
     case 3:
       return scrapeJumboPrice(input);
+    case 7:
+      return scrapeMercaJumboPrice(input, requestConfig);
     case 4:
       return scrapePlazaLamaPrice(input, requestConfig);
     case 5:

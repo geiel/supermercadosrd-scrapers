@@ -11,6 +11,7 @@ Standalone public project for Dominican supermarket scraping.
   - Plaza Lama (`shopId=4`)
   - PriceSmart (`shopId=5`)
   - Bravo (`shopId=6`)
+  - Merca Jumbo (`shopId=7`, private runtime config required)
 - Drizzle + Postgres DB integration
 - DB update behavior aligned with `supermercados-rd` jobs:
   - `products_shops_prices` read/update
@@ -34,6 +35,13 @@ Optional:
 - `POSTGRES_MAX_CONNECTIONS`
 - `REVALIDATE_BASE_URL`
 - `REVALIDATION_SECRET`
+- `MERCA_JUMBO_API_URL`
+- `MERCA_JUMBO_STORE_CODE`
+
+`Merca Jumbo` uses a private Nacional store view. This public repo intentionally
+reads its runtime identifiers from environment variables instead of committing
+them into source control. If the DB row already contains the GraphQL `api`, only
+`MERCA_JUMBO_STORE_CODE` is required at runtime.
 
 ## Install
 
@@ -215,6 +223,8 @@ These workflows expect `DATABASE_URL` in repository secrets.
 
 - This project intentionally excludes admin/business UI logic.
 - Jumbo uses browser automation to bypass Cloudflare.
+- Merca Jumbo support is wired through private runtime config so the public repo
+  does not expose the underlying Nacional store-view identifiers.
 - Bravo is intentionally excluded from hidden-product recovery because the
   normal prices batch already retries hidden Bravo rows by direct `idArticulo`
   API and will unhide them on a successful scrape.

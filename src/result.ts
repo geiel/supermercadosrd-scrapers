@@ -13,6 +13,7 @@ export const SHOP_NAMES: Record<ShopId, ShopName> = {
   4: "plaza_lama",
   5: "pricesmart",
   6: "bravo",
+  7: "merca_jumbo",
 };
 
 export function ok(

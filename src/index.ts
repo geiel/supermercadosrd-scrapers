@@ -35,6 +35,7 @@ export {
   scrapeSirenaPrice,
   scrapeNacionalPrice,
   scrapeJumboPrice,
+  scrapeMercaJumboPrice,
   scrapePlazaLamaPrice,
   scrapePricesmartPrice,
   scrapeBravoPrice,
