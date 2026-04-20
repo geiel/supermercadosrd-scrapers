@@ -33,6 +33,10 @@ export function dedupeUrls(
 
 const SIRENA_IMAGE_PREFIX =
   "https://assets-sirenago.s3-us-west-1.amazonaws.com/product/";
+const SIRENA_VTEX_IMAGE_PREFIXES = [
+  "https://gruporamos.vtexassets.com/arquivos/",
+  "https://gruporamos.vteximg.com.br/arquivos/",
+] as const;
 const BRAVO_IMAGE_PREFIX =
   "https://bravova-resources.superbravo.com.do/images/catalogo/big/";
 const NACIONAL_IMAGE_PREFIX = "https://supermercadosnacional.com/";
@@ -61,6 +65,25 @@ export function getComparableImageKey(imageUrl: string | null | undefined) {
   if (normalizedUrl.startsWith(SIRENA_IMAGE_PREFIX)) {
     const filename = getFilenameFromUrl(normalizedUrl);
     return filename ? `sirena:${filename}` : normalizedUrl;
+  }
+
+  if (
+    SIRENA_VTEX_IMAGE_PREFIXES.some((prefix) => normalizedUrl.startsWith(prefix))
+  ) {
+    try {
+      const parsedUrl = new URL(normalizedUrl);
+      const vtexMatch = parsedUrl.pathname.match(/\/arquivos\/ids\/(\d+)\/([^/]+)$/i);
+      if (vtexMatch) {
+        const [, imageId, filename] = vtexMatch;
+        return `sirena-vtex:${imageId}:${filename.toLowerCase()}`;
+      }
+    } catch {
+      const vtexMatch = normalizedUrl.match(/\/arquivos\/ids\/(\d+)\/([^/?#]+)(?:[?#]|$)/i);
+      if (vtexMatch) {
+        const [, imageId, filename] = vtexMatch;
+        return `sirena-vtex:${imageId}:${filename.toLowerCase()}`;
+      }
+    }
   }
 
   if (normalizedUrl.startsWith(BRAVO_IMAGE_PREFIX)) {

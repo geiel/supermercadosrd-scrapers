@@ -47,7 +47,8 @@ export async function findExistingSirenaReferences(
         or(
           eq(productsShopsPrices.url, candidate.canonicalUrl),
           eq(productsShopsPrices.api, candidate.api),
-          sql`substring(${productsShopsPrices.url} from '/products/index/([^/?#]+)') = ${candidate.friendlyUrl}`
+          sql`substring(${productsShopsPrices.url} from '/products/index/([^/?#]+)') = ${candidate.friendlyUrl}`,
+          sql`substring(${productsShopsPrices.url} from '/([^/?#]+)/p(?:[/?#]|$)') = ${candidate.friendlyUrl}`
         )
       )
     );

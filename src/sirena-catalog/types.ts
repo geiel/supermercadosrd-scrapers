@@ -8,10 +8,19 @@ export type SirenaCategoryNode = {
   children: SirenaCategoryNode[];
 };
 
+export type SirenaCatalogSubcategory = {
+  name: string;
+  url: string;
+  categoryIdPath: string;
+};
+
 export type SirenaTopLevelCategory = {
   name: string;
   friendlyUrl: string;
+  url: string;
+  categoryIdPath: string;
   imageUrl: string | null;
+  subcategories: SirenaCatalogSubcategory[];
 };
 
 export type SirenaCategoryPageProduct = {

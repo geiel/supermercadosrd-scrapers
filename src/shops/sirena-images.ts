@@ -1,5 +1,14 @@
 import { fetchWithRetry, getSirenaHeaders } from "../http-client.js";
-import { dedupeUrls, isRecord, normalizeString } from "../image-utils.js";
+import {
+  dedupeComparableUrls,
+  dedupeUrls,
+  isRecord,
+  normalizeString,
+} from "../image-utils.js";
+import {
+  extractSirenaVtexImages,
+  parseSirenaVtexProductsPayload,
+} from "../sirena-vtex.js";
 import type {
   FetchWithRetryConfig,
   ScrapeProductImagesInput,
@@ -25,6 +34,11 @@ function normalizeSirenaImageUrl(imageUrl: string) {
 }
 
 function extractSirenaImages(payload: unknown) {
+  const vtexProducts = parseSirenaVtexProductsPayload(payload);
+  if (vtexProducts?.[0]) {
+    return dedupeComparableUrls(extractSirenaVtexImages(vtexProducts[0]));
+  }
+
   if (!isRecord(payload)) {
     return [];
   }
@@ -41,7 +55,7 @@ export async function scrapeSirenaImages(
   input: ScrapeProductImagesInput,
   requestConfig?: FetchWithRetryConfig
 ): Promise<ScrapeProductImagesResult> {
-  if (!input.api) {
+  if (!input.api && !input.url) {
     return {
       status: "error",
       shopId,
@@ -52,7 +66,7 @@ export async function scrapeSirenaImages(
   }
 
   const response = await fetchWithRetry(
-    input.api,
+    input.api ?? input.url,
     { headers: getSirenaHeaders() },
     requestConfig
   );

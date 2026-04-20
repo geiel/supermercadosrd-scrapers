@@ -258,6 +258,14 @@ function getShopIdFromImageUrl(imageUrl: string | null): ShopId | null {
     }
 
     if (
+      (hostname === "gruporamos.vtexassets.com" ||
+        hostname === "gruporamos.vteximg.com.br") &&
+      pathname.startsWith("/arquivos/")
+    ) {
+      return 1;
+    }
+
+    if (
       hostname === "supermercadosnacional.com" &&
       pathname.startsWith("/media/catalog/")
     ) {
@@ -291,6 +299,13 @@ function getShopIdFromImageUrl(imageUrl: string | null): ShopId | null {
   if (
     normalizedImageUrl.includes("assets-sirenago.s3-us-west-1.amazonaws.com/product/original/") ||
     normalizedImageUrl.includes("assets-sirenago.s3-us-west-1.amazonaws.com/product/large/")
+  ) {
+    return 1;
+  }
+
+  if (
+    normalizedImageUrl.includes("gruporamos.vtexassets.com/arquivos/") ||
+    normalizedImageUrl.includes("gruporamos.vteximg.com.br/arquivos/")
   ) {
     return 1;
   }

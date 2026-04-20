@@ -1,5 +1,8 @@
 const EXCLUDED_TOP_LEVEL_CATEGORY_SLUGS = [
   "hogar-y-electrodomesticos",
+  "hogar",
+  "electronica",
+  "electrodomesticos",
   "ropa",
 ];
 
