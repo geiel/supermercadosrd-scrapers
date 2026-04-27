@@ -257,6 +257,6 @@ export async function scrapeNacionalPrice(
 ): Promise<ScrapePriceResult> {
   return (
     (await scrapeNacionalPriceFromRest(input.url, requestConfig)) ??
-    error(shopId, "invalid_nacional_sku", false, false)
+    error(shopId, "invalid_nacional_sku", false, true)
   );
 }
