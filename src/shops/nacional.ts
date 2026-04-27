@@ -1,5 +1,10 @@
 import * as cheerio from "cheerio";
-import { fetchWithRetry, getNacionalHeaders } from "../http-client.js";
+import {
+  fetchWithRetryDetailed,
+  getNacionalHeaders,
+  type FetchFailureReason,
+} from "../http-client.js";
+import { extractNacionalSku } from "../recovery/shared.js";
 import { error, notFound, ok } from "../result.js";
 import type {
   FetchWithRetryConfig,
@@ -9,6 +14,18 @@ import type {
 
 const shopId = 2;
 const NACIONAL_HOST = "supermercadosnacional.com";
+
+type NacionalProductLookupResponse = {
+  items?: Array<{
+    sku?: string;
+    status?: unknown;
+    price?: unknown;
+    custom_attributes?: Array<{
+      attribute_code?: string;
+      value?: unknown;
+    }>;
+  }>;
+};
 
 export type NacionalPageInspectionResult =
   | {
@@ -33,16 +50,17 @@ export async function inspectNacionalProductPage(
   url: string,
   requestConfig?: FetchWithRetryConfig
 ): Promise<NacionalPageInspectionResult> {
-  const response = await fetchWithRetry(
+  const result = await fetchWithRetryDetailed(
     url,
     { headers: getNacionalHeaders() },
     requestConfig
   );
+  const response = result.response;
 
   if (!response) {
     return {
       status: "error",
-      reason: "request_failed",
+      reason: result.failureReason,
       retryable: true,
       hide: false,
     };
@@ -121,28 +139,104 @@ export async function inspectNacionalProductPage(
   };
 }
 
+function buildNacionalProductLookupUrl(sku: string): string {
+  const params = new URLSearchParams({
+    "searchCriteria[filter_groups][0][filters][0][field]": "sku",
+    "searchCriteria[filter_groups][0][filters][0][value]": sku,
+    "searchCriteria[filter_groups][0][filters][0][condition_type]": "eq",
+    fields: "items[sku,status,price,custom_attributes[attribute_code,value]],total_count",
+  });
+
+  return `https://supermercadosnacional.com/rest/default/V1/products?${params.toString()}`;
+}
+
+function parsePrice(value: unknown): number | null {
+  const price =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : NaN;
+
+  return Number.isFinite(price) ? price : null;
+}
+
+function getAttributeValue(
+  product: NonNullable<NacionalProductLookupResponse["items"]>[number],
+  code: string
+): unknown {
+  return product.custom_attributes?.find(
+    (attribute) => attribute.attribute_code === code
+  )?.value;
+}
+
+async function scrapeNacionalPriceFromRest(
+  url: string,
+  requestConfig?: FetchWithRetryConfig
+): Promise<ScrapePriceResult | null> {
+  const sku = extractNacionalSku(url);
+  if (!sku) {
+    return null;
+  }
+
+  const result = await fetchWithRetryDetailed(
+    buildNacionalProductLookupUrl(sku),
+    {
+      headers: {
+        Accept: "application/json",
+        Referer: "https://supermercadosnacional.com/",
+        "User-Agent": getNacionalHeaders()["User-Agent"],
+      },
+    },
+    requestConfig
+  );
+
+  if (!result.response) {
+    return error(shopId, result.failureReason, true, false);
+  }
+
+  if (!result.response.ok) {
+    return error(
+      shopId,
+      `http_${result.response.status}` satisfies FetchFailureReason,
+      true,
+      false
+    );
+  }
+
+  const payload = (await result.response
+    .json()
+    .catch(() => null)) as NacionalProductLookupResponse | null;
+  const product = payload?.items?.find((item) => item.sku === sku);
+
+  if (!product) {
+    return notFound(shopId, "product_not_found", true);
+  }
+
+  if (Number(product.status) !== 1) {
+    return notFound(shopId, "product_not_found", true);
+  }
+
+  const regularPrice = parsePrice(product.price);
+  const specialPrice = parsePrice(getAttributeValue(product, "special_price"));
+
+  if (regularPrice === null) {
+    return error(shopId, "price_not_found", false, false);
+  }
+
+  if (specialPrice !== null && specialPrice > 0 && specialPrice < regularPrice) {
+    return ok(shopId, specialPrice.toString(), regularPrice.toString());
+  }
+
+  return ok(shopId, regularPrice.toString(), null);
+}
+
 export async function scrapeNacionalPrice(
   input: ScrapePriceInput,
   requestConfig?: FetchWithRetryConfig
 ): Promise<ScrapePriceResult> {
-  const pageInspection = await inspectNacionalProductPage(input.url, requestConfig);
-
-  if (pageInspection.status === "not_found") {
-    return notFound(shopId, pageInspection.reason, pageInspection.hide);
-  }
-
-  if (pageInspection.status === "error") {
-    return error(
-      shopId,
-      pageInspection.reason,
-      pageInspection.retryable,
-      pageInspection.hide
-    );
-  }
-
-  if (!pageInspection.finalPrice) {
-    return error(shopId, "price_not_found", false, false);
-  }
-
-  return ok(shopId, pageInspection.finalPrice, pageInspection.oldPrice ?? null);
+  return (
+    (await scrapeNacionalPriceFromRest(input.url, requestConfig)) ??
+    error(shopId, "invalid_nacional_sku", false, false)
+  );
 }
