@@ -14,12 +14,16 @@ import type {
 
 const shopId = 2;
 const NACIONAL_HOST = "supermercadosnacional.com";
+const NACIONAL_WEBSITE_ID = 1;
 
 type NacionalProductLookupResponse = {
   items?: Array<{
     sku?: string;
     status?: unknown;
     price?: unknown;
+    extension_attributes?: {
+      website_ids?: unknown;
+    };
     custom_attributes?: Array<{
       attribute_code?: string;
       value?: unknown;
@@ -144,7 +148,8 @@ function buildNacionalProductLookupUrl(sku: string): string {
     "searchCriteria[filter_groups][0][filters][0][field]": "sku",
     "searchCriteria[filter_groups][0][filters][0][value]": sku,
     "searchCriteria[filter_groups][0][filters][0][condition_type]": "eq",
-    fields: "items[sku,status,price,custom_attributes[attribute_code,value]],total_count",
+    fields:
+      "items[sku,status,price,extension_attributes[website_ids],custom_attributes[attribute_code,value]],total_count",
   });
 
   return `https://supermercadosnacional.com/rest/default/V1/products?${params.toString()}`;
@@ -168,6 +173,17 @@ function getAttributeValue(
   return product.custom_attributes?.find(
     (attribute) => attribute.attribute_code === code
   )?.value;
+}
+
+function isNacionalWebsiteProduct(
+  product: NonNullable<NacionalProductLookupResponse["items"]>[number]
+): boolean {
+  const websiteIds = product.extension_attributes?.website_ids;
+  if (!Array.isArray(websiteIds)) {
+    return false;
+  }
+
+  return websiteIds.some((websiteId) => Number(websiteId) === NACIONAL_WEBSITE_ID);
 }
 
 async function scrapeNacionalPriceFromRest(
@@ -214,6 +230,10 @@ async function scrapeNacionalPriceFromRest(
   }
 
   if (Number(product.status) !== 1) {
+    return notFound(shopId, "product_not_found", true);
+  }
+
+  if (!isNacionalWebsiteProduct(product)) {
     return notFound(shopId, "product_not_found", true);
   }
 
