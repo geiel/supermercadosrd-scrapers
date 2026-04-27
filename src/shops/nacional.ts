@@ -166,6 +166,16 @@ function parsePrice(value: unknown): number | null {
   return Number.isFinite(price) ? price : null;
 }
 
+function parseMagentoDate(value: unknown): Date | null {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+
+  const normalized = value.trim().replace(" ", "T");
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function getAttributeValue(
   product: NonNullable<NacionalProductLookupResponse["items"]>[number],
   code: string
@@ -184,6 +194,24 @@ function isNacionalWebsiteProduct(
   }
 
   return websiteIds.some((websiteId) => Number(websiteId) === NACIONAL_WEBSITE_ID);
+}
+
+function isSpecialPriceActive(
+  product: NonNullable<NacionalProductLookupResponse["items"]>[number],
+  now = new Date()
+): boolean {
+  const fromDate = parseMagentoDate(getAttributeValue(product, "special_from_date"));
+  const toDate = parseMagentoDate(getAttributeValue(product, "special_to_date"));
+
+  if (fromDate && now < fromDate) {
+    return false;
+  }
+
+  if (toDate && now > toDate) {
+    return false;
+  }
+
+  return true;
 }
 
 async function scrapeNacionalPriceFromRest(
@@ -244,7 +272,12 @@ async function scrapeNacionalPriceFromRest(
     return error(shopId, "price_not_found", false, false);
   }
 
-  if (specialPrice !== null && specialPrice > 0 && specialPrice < regularPrice) {
+  if (
+    specialPrice !== null &&
+    specialPrice > 0 &&
+    specialPrice < regularPrice &&
+    isSpecialPriceActive(product)
+  ) {
     return ok(shopId, specialPrice.toString(), regularPrice.toString());
   }
 
