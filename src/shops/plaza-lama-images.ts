@@ -10,6 +10,7 @@ import type {
 const shopId = 4;
 const shopName = "plaza_lama";
 const endpoint = "https://nextgentheadless.instaleap.io/api/v3";
+const PLAZA_LAMA_SKU_PATTERN = /-([0-9]{8,14})\/?$/i;
 
 const query = `query GetProductsBySKU($getProductsBySKUInput: GetProductsBySKUInput!) {
   getProductsBySKU(getProductsBySKUInput: $getProductsBySKUInput) {
@@ -29,11 +30,25 @@ const responseSchema = z.array(
   })
 );
 
+function extractPlazaLamaSku(url: string): string | null {
+  try {
+    const pathname = new URL(url).pathname;
+    return pathname.match(PLAZA_LAMA_SKU_PATTERN)?.[1] ?? null;
+  } catch {
+    return url.match(PLAZA_LAMA_SKU_PATTERN)?.[1] ?? null;
+  }
+}
+
+function getPlazaLamaSku(input: ScrapeProductImagesInput): string | null {
+  return input.api?.trim() || extractPlazaLamaSku(input.url);
+}
+
 export async function scrapePlazaLamaImages(
   input: ScrapeProductImagesInput,
   requestConfig?: FetchWithRetryConfig
 ): Promise<ScrapeProductImagesResult> {
-  if (!input.api) {
+  const sku = getPlazaLamaSku(input);
+  if (!sku) {
     return {
       status: "error",
       shopId,
@@ -49,7 +64,7 @@ export async function scrapePlazaLamaImages(
       variables: {
         getProductsBySKUInput: {
           clientId: "PLAZA_LAMA",
-          skus: [input.api],
+          skus: [sku],
           storeReference: "PL08-D",
         },
       },

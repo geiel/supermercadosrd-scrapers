@@ -369,6 +369,7 @@ export function getSirenaHeaders(): Record<string, string> {
 
 export function getPlazaLamaHeaders(): Record<string, string> {
   const userAgent = getRandomUserAgent();
+  const clientVersion = "0.19.89";
 
   return {
     ...getCommonChromeHeaders(userAgent),
@@ -376,8 +377,11 @@ export function getPlazaLamaHeaders(): Record<string, string> {
     "Content-Type": "application/json",
     Origin: "https://plazalama.com.do",
     Referer: "https://plazalama.com.do/",
-    "apollographql-client-name": "Ecommerce Moira client",
-    "apollographql-client-version": "0.18.386",
+    "apollographql-client-name": "e-commerce Moira Engine client PLAZA_LAMA",
+    "apollographql-client-version": clientVersion,
+    "client-name": "e-commerce Moira Engine PLAZA_LAMA",
+    "client-version": clientVersion,
+    "dpl-api-key": "8136e75b-67ca-4aba-9e9a-85b729d725a0",
     "sec-fetch-dest": "empty",
     "sec-fetch-mode": "cors",
     "sec-fetch-site": "cross-site",

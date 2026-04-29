@@ -9,11 +9,15 @@ import type {
 
 const shopId = 4;
 const endpoint = "https://nextgentheadless.instaleap.io/api/v3";
+const PLAZA_LAMA_SKU_PATTERN = /-([0-9]{8,14})\/?$/i;
 
 const query = `query GetProductsBySKU($getProductsBySKUInput: GetProductsBySKUInput!) {
   getProductsBySKU(getProductsBySKUInput: $getProductsBySKUInput) {
     price
+    isActive
+    isAvailable
     promotion {
+      isActive
       conditions {
         price
       }
@@ -27,8 +31,11 @@ const responseSchema = z.array(
       getProductsBySKU: z.array(
         z.object({
           price: z.number(),
+          isActive: z.boolean().optional(),
+          isAvailable: z.boolean().optional(),
           promotion: z
             .object({
+              isActive: z.boolean().optional(),
               conditions: z.array(
                 z.object({
                   price: z.number(),
@@ -42,11 +49,25 @@ const responseSchema = z.array(
   })
 );
 
+function extractPlazaLamaSku(url: string): string | null {
+  try {
+    const pathname = new URL(url).pathname;
+    return pathname.match(PLAZA_LAMA_SKU_PATTERN)?.[1] ?? null;
+  } catch {
+    return url.match(PLAZA_LAMA_SKU_PATTERN)?.[1] ?? null;
+  }
+}
+
+function getPlazaLamaSku(input: ScrapePriceInput): string | null {
+  return input.api?.trim() || extractPlazaLamaSku(input.url);
+}
+
 export async function scrapePlazaLamaPrice(
   input: ScrapePriceInput,
   requestConfig?: FetchWithRetryConfig
 ): Promise<ScrapePriceResult> {
-  if (!input.api) {
+  const sku = getPlazaLamaSku(input);
+  if (!sku) {
     return error(shopId, "missing_api", false, false);
   }
 
@@ -56,7 +77,7 @@ export async function scrapePlazaLamaPrice(
       variables: {
         getProductsBySKUInput: {
           clientId: "PLAZA_LAMA",
-          skus: [input.api],
+          skus: [sku],
           storeReference: "PL08-D",
         },
       },
@@ -94,6 +115,14 @@ export async function scrapePlazaLamaPrice(
   }
 
   const first = products[0];
-  const promoPrice = first.promotion?.conditions[0]?.price ?? first.price;
-  return ok(shopId, String(promoPrice), String(first.price));
+  if (first.isActive === false || first.isAvailable === false) {
+    return notFound(shopId, "product_not_available", true);
+  }
+
+  const promoPrice =
+    first.promotion?.isActive !== false
+      ? first.promotion?.conditions[0]?.price
+      : undefined;
+  const currentPrice = promoPrice ?? first.price;
+  return ok(shopId, String(currentPrice), String(first.price));
 }
