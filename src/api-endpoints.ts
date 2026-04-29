@@ -49,6 +49,7 @@ export const SIRENA_CATEGORY_TREE_API_URL_TEMPLATE = requiredApiEndpoint(
 );
 export const NACIONAL_REST_API_URL = requiredApiEndpoint("NACIONAL_REST_API_URL");
 export const PLAZA_LAMA_GRAPHQL_URL = requiredApiEndpoint("PLAZA_LAMA_GRAPHQL_URL");
+export const PLAZA_LAMA_DPL_API_KEY = requiredApiEndpoint("PLAZA_LAMA_DPL_API_KEY");
 export const PRICESMART_PRODUCT_API_URL = requiredApiEndpoint(
   "PRICESMART_PRODUCT_API_URL"
 );
