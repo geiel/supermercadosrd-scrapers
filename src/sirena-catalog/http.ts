@@ -1,3 +1,4 @@
+import { SIRENA_PRODUCT_API_URL_TEMPLATE } from "../api-endpoints.js";
 import type { FetchWithRetryConfig } from "../types.js";
 import { mapWithConcurrency } from "../utils.js";
 import { shouldIgnoreSirenaCatalogProduct } from "./rules.js";
@@ -24,7 +25,7 @@ export function buildSirenaProductUrl(friendlyUrl: string) {
 export function buildSirenaProductApi(friendlyUrl: string) {
   return (
     buildSirenaVtexProductApi(friendlyUrl) ??
-    `https://www.sirena.do/api/catalog_system/pub/products/search/${friendlyUrl}/p`
+    SIRENA_PRODUCT_API_URL_TEMPLATE.replaceAll("{slug}", friendlyUrl)
   );
 }
 

@@ -1,4 +1,5 @@
 import * as cheerio from "cheerio";
+import { NACIONAL_REST_API_URL } from "../api-endpoints.js";
 import { fetchWithRetry } from "../http-client.js";
 import { buildNacionalProductUrl } from "../recovery/shared.js";
 import type { FetchWithRetryConfig } from "../types.js";
@@ -127,7 +128,7 @@ function buildLookupUrl(skus: string[]) {
     fields: "items[sku,name,custom_attributes[attribute_code,value]],total_count",
   });
 
-  return `${NACIONAL_BASE_URL}/rest/default/V1/products?${params.toString()}`;
+  return `${NACIONAL_REST_API_URL}?${params.toString()}`;
 }
 
 function getAttributeValue(

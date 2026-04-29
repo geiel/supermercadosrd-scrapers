@@ -39,6 +39,13 @@ jobs:
           POSTGRES_MAX_CONNECTIONS: ${{ secrets.POSTGRES_MAX_CONNECTIONS }}
           REVALIDATE_BASE_URL: ${{ secrets.REVALIDATE_BASE_URL }}
           REVALIDATION_SECRET: ${{ secrets.REVALIDATION_SECRET }}
+          SIRENA_PRODUCT_API_URL_TEMPLATE: ${{ secrets.SIRENA_PRODUCT_API_URL_TEMPLATE }}
+          SIRENA_PRODUCTS_SEARCH_API_URL: ${{ secrets.SIRENA_PRODUCTS_SEARCH_API_URL }}
+          SIRENA_CATEGORY_TREE_API_URL_TEMPLATE: ${{ secrets.SIRENA_CATEGORY_TREE_API_URL_TEMPLATE }}
+          NACIONAL_REST_API_URL: ${{ secrets.NACIONAL_REST_API_URL }}
+          PLAZA_LAMA_GRAPHQL_URL: ${{ secrets.PLAZA_LAMA_GRAPHQL_URL }}
+          PRICESMART_PRODUCT_API_URL: ${{ secrets.PRICESMART_PRODUCT_API_URL }}
+          PRICESMART_DISCOVERY_API_URL: ${{ secrets.PRICESMART_DISCOVERY_API_URL }}
         run: |
           pnpm scrape:recover-hidden-products \
             --products-per-shop 50 \

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PRICESMART_PRODUCT_API_URL } from "../api-endpoints.js";
 import { fetchWithRetry, getPricesmartHeaders } from "../http-client.js";
 import { error, notFound, ok } from "../result.js";
 import { getPreferredDoPricesmartLocationPrice } from "../pricesmart-locations.js";
@@ -90,7 +91,7 @@ export async function scrapePricesmartPrice(
 
   for (const sku of skuCandidates) {
     const response = await fetchWithRetry(
-      "https://www.pricesmart.com/api/ct/getProduct",
+      PRICESMART_PRODUCT_API_URL,
       {
         method: "POST",
         body: JSON.stringify([

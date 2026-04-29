@@ -1,4 +1,5 @@
 import * as cheerio from "cheerio";
+import { NACIONAL_REST_API_URL } from "../api-endpoints.js";
 import {
   fetchWithRetryDetailed,
   getNacionalHeaders,
@@ -152,7 +153,7 @@ function buildNacionalProductLookupUrl(sku: string): string {
       "items[sku,status,price,extension_attributes[website_ids],custom_attributes[attribute_code,value]],total_count",
   });
 
-  return `https://supermercadosnacional.com/rest/default/V1/products?${params.toString()}`;
+  return `${NACIONAL_REST_API_URL}?${params.toString()}`;
 }
 
 function parsePrice(value: unknown): number | null {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PLAZA_LAMA_GRAPHQL_URL } from "../api-endpoints.js";
 import { fetchWithRetry, getPlazaLamaHeaders } from "../http-client.js";
 import { dedupeUrls } from "../image-utils.js";
 import type {
@@ -9,7 +10,6 @@ import type {
 
 const shopId = 4;
 const shopName = "plaza_lama";
-const endpoint = "https://nextgentheadless.instaleap.io/api/v3";
 const PLAZA_LAMA_SKU_PATTERN = /-([0-9]{8,14})\/?$/i;
 
 const query = `query GetProductsBySKU($getProductsBySKUInput: GetProductsBySKUInput!) {
@@ -73,7 +73,7 @@ export async function scrapePlazaLamaImages(
   ];
 
   const response = await fetchWithRetry(
-    endpoint,
+    PLAZA_LAMA_GRAPHQL_URL,
     {
       method: "POST",
       body: JSON.stringify(payload),

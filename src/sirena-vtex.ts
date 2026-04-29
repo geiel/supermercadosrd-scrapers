@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  SIRENA_CATEGORY_TREE_API_URL_TEMPLATE,
+  SIRENA_PRODUCTS_SEARCH_API_URL,
+  SIRENA_PRODUCT_API_URL_TEMPLATE,
+} from "./api-endpoints.js";
 import { fetchWithRetry, getSirenaHeaders } from "./http-client.js";
 import type { FetchWithRetryConfig } from "./types.js";
 
@@ -133,6 +138,20 @@ function normalizeTrailingSlash(value: string) {
   return value.replace(/\/+$/, "");
 }
 
+function buildUrlFromTemplate(
+  template: string,
+  replacements: Record<string, string>
+) {
+  return Object.entries(replacements).reduce(
+    (url, [key, value]) => url.replaceAll(`{${key}}`, value),
+    template
+  );
+}
+
+function appendSearchParams(endpoint: string, params: URLSearchParams) {
+  return `${endpoint}${endpoint.includes("?") ? "&" : "?"}${params.toString()}`;
+}
+
 function toPriceString(value: number | null | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return null;
@@ -218,7 +237,7 @@ export function buildSirenaVtexProductApi(value: string) {
     return null;
   }
 
-  return `${SIRENA_BASE_URL}/api/catalog_system/pub/products/search/${slug}/p`;
+  return buildUrlFromTemplate(SIRENA_PRODUCT_API_URL_TEMPLATE, { slug });
 }
 
 export function buildSirenaVtexSearchUrl(query: string) {
@@ -232,7 +251,7 @@ function buildSirenaVtexSearchApi(query: string, from: number, to: number) {
     _to: String(to),
   });
 
-  return `${SIRENA_BASE_URL}/api/catalog_system/pub/products/search?${params.toString()}`;
+  return appendSearchParams(SIRENA_PRODUCTS_SEARCH_API_URL, params);
 }
 
 function buildSirenaVtexCategoryApi(categoryIdPath: string, from: number, to: number) {
@@ -242,7 +261,7 @@ function buildSirenaVtexCategoryApi(categoryIdPath: string, from: number, to: nu
     _to: String(to),
   });
 
-  return `${SIRENA_BASE_URL}/api/catalog_system/pub/products/search?${params.toString()}`;
+  return appendSearchParams(SIRENA_PRODUCTS_SEARCH_API_URL, params);
 }
 
 async function fetchSirenaVtexJson(
@@ -380,7 +399,9 @@ export async function fetchSirenaVtexCategoryTree(
   requestConfig?: FetchWithRetryConfig
 ) {
   const payload = await fetchSirenaVtexJson(
-    `${SIRENA_BASE_URL}/api/catalog_system/pub/category/tree/${CATEGORY_TREE_DEPTH}`,
+    buildUrlFromTemplate(SIRENA_CATEGORY_TREE_API_URL_TEMPLATE, {
+      depth: String(CATEGORY_TREE_DEPTH),
+    }),
     requestConfig
   );
 

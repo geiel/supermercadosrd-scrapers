@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PRICESMART_DISCOVERY_API_URL } from "../api-endpoints.js";
 import { fetchWithRetry } from "../http-client.js";
 import { dedupeUrls, extractTrailingNumericId } from "../image-utils.js";
 import type {
@@ -9,7 +10,6 @@ import type {
 
 const shopId = 5;
 const shopName = "pricesmart";
-const endpoint = "https://www.pricesmart.com/api/br_discovery/getProductsByKeyword";
 
 const searchHeaders = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -74,7 +74,7 @@ async function searchBySku(
   ];
 
   const response = await fetchWithRetry(
-    endpoint,
+    PRICESMART_DISCOVERY_API_URL,
     {
       method: "POST",
       headers: searchHeaders,

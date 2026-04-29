@@ -1,9 +1,12 @@
 import * as cheerio from "cheerio";
+import {
+  NACIONAL_REST_API_URL,
+  PLAZA_LAMA_GRAPHQL_URL as CONFIGURED_PLAZA_LAMA_GRAPHQL_URL,
+} from "../api-endpoints.js";
 import type { RecoveryKey } from "./types.js";
 
 export const RECOVERABLE_SHOP_IDS = [2, 3, 4] as const;
-export const PLAZA_LAMA_GRAPHQL_URL =
-  "https://nextgentheadless.instaleap.io/api/v3";
+export const PLAZA_LAMA_GRAPHQL_URL = CONFIGURED_PLAZA_LAMA_GRAPHQL_URL;
 
 type SearchCandidate = {
   name: string;
@@ -47,7 +50,7 @@ export function buildNacionalLookupUrl(sku: string): string {
     fields: "items[sku,name,custom_attributes[attribute_code,value]],total_count",
   });
 
-  return `https://supermercadosnacional.com/rest/default/V1/products?${params.toString()}`;
+  return `${NACIONAL_REST_API_URL}?${params.toString()}`;
 }
 
 export function buildNacionalProductUrl(urlPath: string): string {
