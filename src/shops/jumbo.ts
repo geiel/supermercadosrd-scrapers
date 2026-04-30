@@ -5,7 +5,8 @@ import {
 } from "../http-client.js";
 import {
   buildJumboProductUrl,
-  extractJumboUrlTail,
+  buildJumboProductUrlFromNameAndSku,
+  extractJumboSkuCandidates,
 } from "../recovery/shared.js";
 import { error, notFound, ok } from "../result.js";
 import type {
@@ -21,6 +22,7 @@ const jumboProductQuery = `query JumboProductBySku($sku: String!) {
   products(filter: { sku: { eq: $sku } }) {
     items {
       sku
+      name
       url_key
       price_range {
         minimum_price {
@@ -43,6 +45,7 @@ const jumboProductResponseSchema = z.object({
         .array(
           z.object({
             sku: z.string(),
+            name: z.string().nullable().optional(),
             url_key: z.string().nullable().optional(),
             price_range: z
               .object({
@@ -74,84 +77,92 @@ export async function scrapeJumboPrice(
   input: ScrapePriceInput,
   requestConfig?: FetchWithRetryConfig
 ): Promise<ScrapePriceResult> {
-  const sku = extractJumboUrlTail(input.url);
-  if (!sku) {
+  const skuCandidates = extractJumboSkuCandidates(input.url);
+  if (skuCandidates.length === 0) {
     return error(shopId, "invalid_jumbo_sku", false, true);
   }
 
   const headers = getJumboHeaders();
-  const result = await fetchWithRetryDetailed(
-    JUMBO_GRAPHQL_URL,
-    {
-      method: "POST",
-      headers: {
-        ...headers,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        Origin: "https://jumbo.com.do",
-        Referer: input.url,
-      },
-      body: JSON.stringify({
-        query: jumboProductQuery,
-        variables: {
-          sku,
+  for (const sku of skuCandidates) {
+    const result = await fetchWithRetryDetailed(
+      JUMBO_GRAPHQL_URL,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Origin: "https://jumbo.com.do",
+          Referer: input.url,
         },
-      }),
-    },
-    requestConfig
-  );
+        body: JSON.stringify({
+          query: jumboProductQuery,
+          variables: {
+            sku,
+          },
+        }),
+      },
+      requestConfig
+    );
 
-  if (!result.response) {
-    return error(shopId, result.failureReason, true, false);
-  }
+    if (!result.response) {
+      return error(shopId, result.failureReason, true, false);
+    }
 
-  if (!result.response.ok) {
-    return error(
+    if (!result.response.ok) {
+      return error(
+        shopId,
+        `http_${result.response.status}`,
+        result.response.status >= 500 || result.response.status === 429,
+        false
+      );
+    }
+
+    const parsedResponse = jumboProductResponseSchema.safeParse(
+      await result.response.json().catch(() => null)
+    );
+    if (!parsedResponse.success) {
+      return error(shopId, "invalid_payload", false, false);
+    }
+
+    const product =
+      parsedResponse.data.data.products.items.find(
+        (candidate) => candidate.sku === sku
+      ) ?? null;
+
+    if (!product) {
+      continue;
+    }
+
+    const finalPrice = toPriceString(
+      product.price_range?.minimum_price.final_price.value ?? null
+    );
+
+    if (!finalPrice) {
+      return error(shopId, "price_not_found", false, false);
+    }
+
+    const regularPriceValue =
+      product.price_range?.minimum_price.regular_price.value ?? null;
+    const regularPrice =
+      regularPriceValue !== null &&
+      regularPriceValue !== undefined &&
+      regularPriceValue > Number(finalPrice)
+        ? toPriceString(regularPriceValue)
+        : null;
+
+    return ok(
       shopId,
-      `http_${result.response.status}`,
-      result.response.status >= 500 || result.response.status === 429,
-      false
+      finalPrice,
+      regularPrice,
+      null,
+      product.url_key
+        ? buildJumboProductUrl(product.url_key)
+        : product.name
+          ? buildJumboProductUrlFromNameAndSku(product.name, product.sku)
+          : null
     );
   }
 
-  const parsedResponse = jumboProductResponseSchema.safeParse(
-    await result.response.json().catch(() => null)
-  );
-  if (!parsedResponse.success) {
-    return error(shopId, "invalid_payload", false, false);
-  }
-
-  const product =
-    parsedResponse.data.data.products.items.find(
-      (candidate) => candidate.sku === sku
-    ) ?? null;
-
-  if (!product) {
-    return notFound(shopId, "product_not_found", true);
-  }
-
-  const finalPrice = toPriceString(
-    product.price_range?.minimum_price.final_price.value ?? null
-  );
-
-  if (!finalPrice) {
-    return error(shopId, "price_not_found", false, false);
-  }
-
-  const regularPriceValue =
-    product.price_range?.minimum_price.regular_price.value ?? null;
-  const regularPrice =
-    regularPriceValue !== null &&
-    regularPriceValue !== undefined &&
-    regularPriceValue > Number(finalPrice)
-      ? toPriceString(regularPriceValue)
-      : null;
-
-  return ok(
-    shopId,
-    finalPrice,
-    regularPrice,
-    null,
-    product.url_key ? buildJumboProductUrl(product.url_key) : null
-  );
+  return notFound(shopId, "product_not_found", true);
 }

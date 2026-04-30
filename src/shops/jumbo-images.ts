@@ -7,7 +7,7 @@ import {
   dedupeComparableUrls,
   normalizeNacionalImageUrl,
 } from "../image-utils.js";
-import { extractJumboUrlTail } from "../recovery/shared.js";
+import { extractJumboSkuCandidates } from "../recovery/shared.js";
 import type {
   FetchWithRetryConfig,
   ScrapeProductImagesInput,
@@ -84,8 +84,8 @@ export async function scrapeJumboImages(
   input: ScrapeProductImagesInput,
   requestConfig?: FetchWithRetryConfig
 ): Promise<ScrapeProductImagesResult> {
-  const sku = extractJumboUrlTail(input.url);
-  if (!sku) {
+  const skuCandidates = extractJumboSkuCandidates(input.url);
+  if (skuCandidates.length === 0) {
     return {
       status: "error",
       shopId,
@@ -96,96 +96,100 @@ export async function scrapeJumboImages(
   }
 
   const headers = getJumboHeaders();
-  const result = await fetchWithRetryDetailed(
-    JUMBO_GRAPHQL_URL,
-    {
-      method: "POST",
-      headers: {
-        ...headers,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        Origin: "https://jumbo.com.do",
-        Referer: input.url,
-      },
-      body: JSON.stringify({
-        query: jumboImagesQuery,
-        variables: {
-          sku,
+  for (const sku of skuCandidates) {
+    const result = await fetchWithRetryDetailed(
+      JUMBO_GRAPHQL_URL,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Origin: "https://jumbo.com.do",
+          Referer: input.url,
         },
-      }),
-    },
-    requestConfig
-  );
+        body: JSON.stringify({
+          query: jumboImagesQuery,
+          variables: {
+            sku,
+          },
+        }),
+      },
+      requestConfig
+    );
 
-  if (!result.response) {
+    if (!result.response) {
+      return {
+        status: "error",
+        shopId,
+        shopName,
+        reason: result.failureReason,
+        retryable: true,
+      };
+    }
+
+    if (!result.response.ok) {
+      return {
+        status: "error",
+        shopId,
+        shopName,
+        reason: `http_${result.response.status}`,
+        retryable: result.response.status >= 500 || result.response.status === 429,
+      };
+    }
+
+    const parsedResponse = jumboImagesResponseSchema.safeParse(
+      await result.response.json().catch(() => null)
+    );
+    if (!parsedResponse.success) {
+      return {
+        status: "error",
+        shopId,
+        shopName,
+        reason: "invalid_payload",
+        retryable: false,
+      };
+    }
+
+    const product =
+      parsedResponse.data.data.products.items.find(
+        (candidate) => candidate.sku === sku
+      ) ?? null;
+
+    if (!product) {
+      continue;
+    }
+
+    const images = dedupeComparableUrls([
+      product.image?.url,
+      product.small_image?.url,
+      product.thumbnail?.url,
+      ...(product.media_gallery ?? [])
+        .filter((image) => !image.disabled)
+        .map((image) => image.url),
+    ]).map(normalizeNacionalImageUrl);
+
+    if (images.length === 0) {
+      return {
+        status: "not_found",
+        shopId,
+        shopName,
+        reason: "image_not_found",
+      };
+    }
+
     return {
-      status: "error",
+      status: "ok",
       shopId,
       shopName,
-      reason: result.failureReason,
-      retryable: true,
-    };
-  }
-
-  if (!result.response.ok) {
-    return {
-      status: "error",
-      shopId,
-      shopName,
-      reason: `http_${result.response.status}`,
-      retryable: result.response.status >= 500 || result.response.status === 429,
-    };
-  }
-
-  const parsedResponse = jumboImagesResponseSchema.safeParse(
-    await result.response.json().catch(() => null)
-  );
-  if (!parsedResponse.success) {
-    return {
-      status: "error",
-      shopId,
-      shopName,
-      reason: "invalid_payload",
-      retryable: false,
-    };
-  }
-
-  const product =
-    parsedResponse.data.data.products.items.find(
-      (candidate) => candidate.sku === sku
-    ) ?? null;
-
-  if (!product) {
-    return {
-      status: "not_found",
-      shopId,
-      shopName,
-      reason: "product_not_found",
-    };
-  }
-
-  const images = dedupeComparableUrls([
-    product.image?.url,
-    product.small_image?.url,
-    product.thumbnail?.url,
-    ...(product.media_gallery ?? [])
-      .filter((image) => !image.disabled)
-      .map((image) => image.url),
-  ]).map(normalizeNacionalImageUrl);
-
-  if (images.length === 0) {
-    return {
-      status: "not_found",
-      shopId,
-      shopName,
-      reason: "image_not_found",
+      images,
     };
   }
 
   return {
-    status: "ok",
+    status: "not_found",
     shopId,
     shopName,
-    images,
+    reason: "product_not_found",
   };
 }

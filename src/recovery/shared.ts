@@ -38,6 +38,38 @@ export function extractJumboUrlTail(url: string): string | null {
   return extractTrailingDigits(url, /-([0-9]{6,})(?:\.html?)?$/i);
 }
 
+export function extractJumboSkuCandidates(url: string): string[] {
+  const normalizedUrl = url.trim();
+  const candidates = new Set<string>();
+
+  const addCandidate = (value: string | null | undefined) => {
+    if (!value) {
+      return;
+    }
+
+    candidates.add(value);
+
+    if (value.startsWith("998") && value.length > 3) {
+      candidates.add(value.slice(3));
+    }
+  };
+
+  addCandidate(extractJumboUrlTail(normalizedUrl));
+
+  try {
+    const pathname = new URL(normalizedUrl).pathname;
+    for (const match of pathname.matchAll(/-([0-9]{6,})(?=[/.]|$)/gi)) {
+      addCandidate(match[1]);
+    }
+  } catch {
+    for (const match of normalizedUrl.matchAll(/-([0-9]{6,})(?=[/.?#]|$)/gi)) {
+      addCandidate(match[1]);
+    }
+  }
+
+  return Array.from(candidates);
+}
+
 export function extractPlazaLamaSku(url: string): string | null {
   return extractTrailingDigits(url, /-([0-9]{8,14})\/?$/i);
 }
@@ -67,6 +99,20 @@ export function buildJumboSearchUrl(query: string): string {
 export function buildJumboProductUrl(urlKey: string): string {
   const normalized = urlKey.replace(/^\//, "").replace(/\.html?$/i, "");
   return `https://jumbo.com.do/${normalized}`;
+}
+
+function slugifyJumboProductName(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+export function buildJumboProductUrlFromNameAndSku(name: string, sku: string): string {
+  const slug = slugifyJumboProductName(name);
+  return buildJumboProductUrl(`${slug}-${sku}`);
 }
 
 export function buildPlazaLamaProductUrl(slug: string): string {
