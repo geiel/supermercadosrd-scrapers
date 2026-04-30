@@ -17,6 +17,8 @@ import type {
 const shopId = 3;
 const shopName = "jumbo";
 const JUMBO_GRAPHQL_URL = "https://jumbo.com.do/graphql";
+const JUMBO_STORE_CODE_ENV = "JUMBO_STORE_CODE";
+const DEFAULT_JUMBO_STORE_CODE = "jumbo";
 
 const jumboImagesQuery = `query JumboImagesBySku($sku: String!) {
   products(filter: { sku: { eq: $sku } }) {
@@ -80,6 +82,11 @@ const jumboImagesResponseSchema = z.object({
   }),
 });
 
+function resolveJumboStoreCode() {
+  const storeCode = process.env[JUMBO_STORE_CODE_ENV]?.trim();
+  return storeCode || DEFAULT_JUMBO_STORE_CODE;
+}
+
 export async function scrapeJumboImages(
   input: ScrapeProductImagesInput,
   requestConfig?: FetchWithRetryConfig
@@ -107,6 +114,7 @@ export async function scrapeJumboImages(
           "Content-Type": "application/json",
           Origin: "https://jumbo.com.do",
           Referer: input.url,
+          store: resolveJumboStoreCode(),
         },
         body: JSON.stringify({
           query: jumboImagesQuery,

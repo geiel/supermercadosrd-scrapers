@@ -17,6 +17,8 @@ import type {
 
 const shopId = 3;
 const JUMBO_GRAPHQL_URL = "https://jumbo.com.do/graphql";
+const JUMBO_STORE_CODE_ENV = "JUMBO_STORE_CODE";
+const DEFAULT_JUMBO_STORE_CODE = "jumbo";
 
 const jumboProductQuery = `query JumboProductBySku($sku: String!) {
   products(filter: { sku: { eq: $sku } }) {
@@ -73,6 +75,11 @@ function toPriceString(value: number | null | undefined) {
     : String(value);
 }
 
+function resolveJumboStoreCode() {
+  const storeCode = process.env[JUMBO_STORE_CODE_ENV]?.trim();
+  return storeCode || DEFAULT_JUMBO_STORE_CODE;
+}
+
 export async function scrapeJumboPrice(
   input: ScrapePriceInput,
   requestConfig?: FetchWithRetryConfig
@@ -94,6 +101,7 @@ export async function scrapeJumboPrice(
           "Content-Type": "application/json",
           Origin: "https://jumbo.com.do",
           Referer: input.url,
+          store: resolveJumboStoreCode(),
         },
         body: JSON.stringify({
           query: jumboProductQuery,
