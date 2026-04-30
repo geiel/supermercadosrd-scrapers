@@ -1,40 +1,157 @@
-import * as cheerio from "cheerio";
-import { fetchWithBrowserDetailed } from "../http-client.js";
+import { z } from "zod";
+import {
+  fetchWithRetryDetailed,
+  getJumboHeaders,
+} from "../http-client.js";
+import {
+  buildJumboProductUrl,
+  extractJumboUrlTail,
+} from "../recovery/shared.js";
 import { error, notFound, ok } from "../result.js";
-import type { ScrapePriceInput, ScrapePriceResult } from "../types.js";
+import type {
+  FetchWithRetryConfig,
+  ScrapePriceInput,
+  ScrapePriceResult,
+} from "../types.js";
 
 const shopId = 3;
+const JUMBO_GRAPHQL_URL = "https://jumbo.com.do/graphql";
+
+const jumboProductQuery = `query JumboProductBySku($sku: String!) {
+  products(filter: { sku: { eq: $sku } }) {
+    items {
+      sku
+      url_key
+      price_range {
+        minimum_price {
+          final_price {
+            value
+          }
+          regular_price {
+            value
+          }
+        }
+      }
+    }
+  }
+}`;
+
+const jumboProductResponseSchema = z.object({
+  data: z.object({
+    products: z.object({
+      items: z
+        .array(
+          z.object({
+            sku: z.string(),
+            url_key: z.string().nullable().optional(),
+            price_range: z
+              .object({
+                minimum_price: z.object({
+                  final_price: z.object({
+                    value: z.number().nullable().optional(),
+                  }),
+                  regular_price: z.object({
+                    value: z.number().nullable().optional(),
+                  }),
+                }),
+              })
+              .nullable()
+              .optional(),
+          })
+        )
+        .default([]),
+    }),
+  }),
+});
+
+function toPriceString(value: number | null | undefined) {
+  return value === null || value === undefined || Number.isNaN(value)
+    ? null
+    : String(value);
+}
 
 export async function scrapeJumboPrice(
-  input: ScrapePriceInput
+  input: ScrapePriceInput,
+  requestConfig?: FetchWithRetryConfig
 ): Promise<ScrapePriceResult> {
-  const response = await fetchWithBrowserDetailed(input.url);
-  if (!response.ok) {
-    const retryable = response.reason !== "blocked";
-    return error(shopId, response.reason, retryable, false);
+  const sku = extractJumboUrlTail(input.url);
+  if (!sku) {
+    return error(shopId, "invalid_jumbo_sku", false, true);
   }
 
-  const { html } = response;
+  const headers = getJumboHeaders();
+  const result = await fetchWithRetryDetailed(
+    JUMBO_GRAPHQL_URL,
+    {
+      method: "POST",
+      headers: {
+        ...headers,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Origin: "https://jumbo.com.do",
+        Referer: input.url,
+      },
+      body: JSON.stringify({
+        query: jumboProductQuery,
+        variables: {
+          sku,
+        },
+      }),
+    },
+    requestConfig
+  );
 
-  const $ = cheerio.load(html);
-  const title =
-    $('meta[property="og:title"]').attr("content")?.trim() ??
-    $("title").first().text().trim();
+  if (!result.response) {
+    return error(shopId, result.failureReason, true, false);
+  }
 
-  if (title.toLowerCase().includes("404")) {
+  if (!result.response.ok) {
+    return error(
+      shopId,
+      `http_${result.response.status}`,
+      result.response.status >= 500 || result.response.status === 429,
+      false
+    );
+  }
+
+  const parsedResponse = jumboProductResponseSchema.safeParse(
+    await result.response.json().catch(() => null)
+  );
+  if (!parsedResponse.success) {
+    return error(shopId, "invalid_payload", false, false);
+  }
+
+  const product =
+    parsedResponse.data.data.products.items.find(
+      (candidate) => candidate.sku === sku
+    ) ?? null;
+
+  if (!product) {
     return notFound(shopId, "product_not_found", true);
   }
 
-  const finalPrice = $('span[data-price-type="finalPrice"]').attr(
-    "data-price-amount"
-  );
-  const oldPrice = $('span[data-price-type="oldPrice"]').attr(
-    "data-price-amount"
+  const finalPrice = toPriceString(
+    product.price_range?.minimum_price.final_price.value ?? null
   );
 
   if (!finalPrice) {
-    return notFound(shopId, "price_not_found", true);
+    return error(shopId, "price_not_found", false, false);
   }
 
-  return ok(shopId, finalPrice, oldPrice ?? null);
+  const regularPriceValue =
+    product.price_range?.minimum_price.regular_price.value ?? null;
+  const regularPrice =
+    regularPriceValue !== null &&
+    regularPriceValue !== undefined &&
+    regularPriceValue > Number(finalPrice)
+      ? toPriceString(regularPriceValue)
+      : null;
+
+  return ok(
+    shopId,
+    finalPrice,
+    regularPrice,
+    null,
+    product.url_key ? buildJumboProductUrl(product.url_key) : null
+  );
 }

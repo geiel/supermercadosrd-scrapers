@@ -64,6 +64,11 @@ export function buildJumboSearchUrl(query: string): string {
   }).toString()}`;
 }
 
+export function buildJumboProductUrl(urlKey: string): string {
+  const normalized = urlKey.replace(/^\//, "").replace(/\.html?$/i, "");
+  return `https://jumbo.com.do/${normalized}`;
+}
+
 export function buildPlazaLamaProductUrl(slug: string): string {
   return `https://plazalama.com.do/p/${slug.replace(/^\//, "")}`;
 }

@@ -1,101 +1,161 @@
-import * as cheerio from "cheerio";
 import { z } from "zod";
-import { fetchWithBrowserDetailed } from "../http-client.js";
-import { dedupeUrls, isRecord, toAbsoluteUrl } from "../image-utils.js";
+import {
+  fetchWithRetryDetailed,
+  getJumboHeaders,
+} from "../http-client.js";
+import {
+  dedupeComparableUrls,
+  normalizeNacionalImageUrl,
+} from "../image-utils.js";
+import { extractJumboUrlTail } from "../recovery/shared.js";
 import type {
+  FetchWithRetryConfig,
   ScrapeProductImagesInput,
   ScrapeProductImagesResult,
 } from "../types.js";
 
 const shopId = 3;
 const shopName = "jumbo";
-const jumboPlaceholderImagePath =
-  "/pub/media/catalog/product/placeholder/default/jumbo-placeholder.png";
-const jumboCachedImagePathPattern =
-  /\/pub\/media\/catalog\/product\/cache\/[^/]+\//i;
+const JUMBO_GRAPHQL_URL = "https://jumbo.com.do/graphql";
 
-const jumboImageSchema = z.object({
-  product: z.object({
-    image_url: z.string(),
+const jumboImagesQuery = `query JumboImagesBySku($sku: String!) {
+  products(filter: { sku: { eq: $sku } }) {
+    items {
+      sku
+      image {
+        url
+      }
+      small_image {
+        url
+      }
+      thumbnail {
+        url
+      }
+      media_gallery {
+        url
+        disabled
+      }
+    }
+  }
+}`;
+
+const jumboImagesResponseSchema = z.object({
+  data: z.object({
+    products: z.object({
+      items: z
+        .array(
+          z.object({
+            sku: z.string(),
+            image: z
+              .object({
+                url: z.string().nullable().optional(),
+              })
+              .nullable()
+              .optional(),
+            small_image: z
+              .object({
+                url: z.string().nullable().optional(),
+              })
+              .nullable()
+              .optional(),
+            thumbnail: z
+              .object({
+                url: z.string().nullable().optional(),
+              })
+              .nullable()
+              .optional(),
+            media_gallery: z
+              .array(
+                z.object({
+                  url: z.string().nullable().optional(),
+                  disabled: z.boolean().nullable().optional(),
+                })
+              )
+              .nullable()
+              .optional(),
+          })
+        )
+        .default([]),
+    }),
   }),
 });
 
-function normalizeJumboImageUrl(imageUrl: string) {
-  try {
-    const parsedUrl = new URL(imageUrl);
-    parsedUrl.pathname = parsedUrl.pathname.replace(
-      jumboCachedImagePathPattern,
-      "/pub/media/catalog/product/"
-    );
-    return parsedUrl.toString();
-  } catch {
-    return imageUrl.replace(
-      jumboCachedImagePathPattern,
-      "/pub/media/catalog/product/"
-    );
-  }
-}
-
-function extractJumboImages(url: string, html: string) {
-  const $ = cheerio.load(html);
-  const title =
-    $('meta[property="og:title"]').attr("content")?.trim() ??
-    $("title").first().text().trim();
-
-  if (title.toLowerCase().includes("404")) {
-    return { notFound: true, images: [] as string[] };
-  }
-
-  const scriptContent = $('script[type="text/x-magento-init"]').html();
-  let gtmImageUrl = "";
-
-  if (scriptContent) {
-    const parsed = JSON.parse(scriptContent) as Record<string, unknown>;
-    const starRecord = isRecord(parsed["*"]) ? parsed["*"] : null;
-    const gtmDataLayer = isRecord(starRecord?.magepalGtmDatalayer)
-      ? starRecord.magepalGtmDatalayer
-      : null;
-    const dataArray = Array.isArray(gtmDataLayer?.data) ? gtmDataLayer.data : [];
-
-    const parsedImage = jumboImageSchema.safeParse(dataArray[1]);
-    if (parsedImage.success) {
-      gtmImageUrl = parsedImage.data.product.image_url;
-    }
-  }
-
-  const images = dedupeUrls([
-    gtmImageUrl,
-    $('meta[property="og:image"]').attr("content"),
-    $('meta[name="twitter:image"]').attr("content"),
-    $(".gallery-placeholder__image").attr("src"),
-    $("img.product-image-photo").attr("src"),
-  ])
-    .map((imageUrl) => toAbsoluteUrl(imageUrl, url))
-    .map(normalizeJumboImageUrl)
-    .filter(
-      (imageUrl) =>
-        !imageUrl.toLowerCase().includes(jumboPlaceholderImagePath)
-    );
-
-  return { notFound: false, images };
-}
-
 export async function scrapeJumboImages(
-  input: ScrapeProductImagesInput
+  input: ScrapeProductImagesInput,
+  requestConfig?: FetchWithRetryConfig
 ): Promise<ScrapeProductImagesResult> {
-  const response = await fetchWithBrowserDetailed(input.url);
-  if (!response.ok) {
+  const sku = extractJumboUrlTail(input.url);
+  if (!sku) {
     return {
       status: "error",
       shopId,
       shopName,
-      reason: response.reason,
-      retryable: response.reason !== "blocked",
+      reason: "invalid_jumbo_sku",
+      retryable: false,
     };
   }
 
-  const extracted = extractJumboImages(input.url, response.html);
-  if (extracted.notFound) {
+  const headers = getJumboHeaders();
+  const result = await fetchWithRetryDetailed(
+    JUMBO_GRAPHQL_URL,
+    {
+      method: "POST",
+      headers: {
+        ...headers,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Origin: "https://jumbo.com.do",
+        Referer: input.url,
+      },
+      body: JSON.stringify({
+        query: jumboImagesQuery,
+        variables: {
+          sku,
+        },
+      }),
+    },
+    requestConfig
+  );
+
+  if (!result.response) {
+    return {
+      status: "error",
+      shopId,
+      shopName,
+      reason: result.failureReason,
+      retryable: true,
+    };
+  }
+
+  if (!result.response.ok) {
+    return {
+      status: "error",
+      shopId,
+      shopName,
+      reason: `http_${result.response.status}`,
+      retryable: result.response.status >= 500 || result.response.status === 429,
+    };
+  }
+
+  const parsedResponse = jumboImagesResponseSchema.safeParse(
+    await result.response.json().catch(() => null)
+  );
+  if (!parsedResponse.success) {
+    return {
+      status: "error",
+      shopId,
+      shopName,
+      reason: "invalid_payload",
+      retryable: false,
+    };
+  }
+
+  const product =
+    parsedResponse.data.data.products.items.find(
+      (candidate) => candidate.sku === sku
+    ) ?? null;
+
+  if (!product) {
     return {
       status: "not_found",
       shopId,
@@ -104,7 +164,16 @@ export async function scrapeJumboImages(
     };
   }
 
-  if (extracted.images.length === 0) {
+  const images = dedupeComparableUrls([
+    product.image?.url,
+    product.small_image?.url,
+    product.thumbnail?.url,
+    ...(product.media_gallery ?? [])
+      .filter((image) => !image.disabled)
+      .map((image) => image.url),
+  ]).map(normalizeNacionalImageUrl);
+
+  if (images.length === 0) {
     return {
       status: "not_found",
       shopId,
@@ -117,6 +186,6 @@ export async function scrapeJumboImages(
     status: "ok",
     shopId,
     shopName,
-    images: extracted.images,
+    images,
   };
 }

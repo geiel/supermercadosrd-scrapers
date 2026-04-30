@@ -25,6 +25,10 @@ function logPrefix(row: ShopPriceRow) {
   return `url=${row.url} productId=${row.productId} shopId=${row.shopId}`;
 }
 
+function normalizeUrlForComparison(url: string) {
+  return url.trim().replace(/\/+$/, "");
+}
+
 async function hideProductPrice(row: ShopPriceRow) {
   await db
     .update(productsShopsPrices)
@@ -94,14 +98,41 @@ export async function applyScrapeResult(
 
   await showProductPrice(row);
 
-  if (
+  const canonicalUrl = result.canonicalUrl?.trim() || null;
+  const urlChanged =
+    canonicalUrl !== null &&
+    normalizeUrlForComparison(row.url) !== normalizeUrlForComparison(canonicalUrl);
+  const priceAndLocationUnchanged =
     row.currentPrice !== null &&
     Number(row.currentPrice) === Number(result.currentPrice) &&
     Number(row.regularPrice ?? 0) === Number(result.regularPrice ?? 0) &&
-    (row.locationId ?? null) === (result.locationId ?? null)
-  ) {
+    (row.locationId ?? null) === (result.locationId ?? null);
+
+  if (priceAndLocationUnchanged && !urlChanged) {
     await touchProductPrice(row);
     console.log(`[IGNORE] ${result.shopName} ${logPrefix(row)}`);
+    return;
+  }
+
+  if (priceAndLocationUnchanged && urlChanged) {
+    await db
+      .update(productsShopsPrices)
+      .set({
+        url: canonicalUrl,
+        updateAt: new Date(),
+      })
+      .where(
+        and(
+          eq(productsShopsPrices.productId, row.productId),
+          eq(productsShopsPrices.shopId, row.shopId),
+          sql`${productsShopsPrices.url} IS DISTINCT FROM ${canonicalUrl}`
+        )
+      );
+
+    await revalidateProduct(row.productId);
+    console.log(
+      `[DONE] ${result.shopName} ${logPrefix(row)} canonicalUrl=${canonicalUrl}`
+    );
     return;
   }
 
@@ -115,6 +146,7 @@ export async function applyScrapeResult(
       currentPrice: result.currentPrice,
       regularPrice: result.regularPrice,
       locationId: result.locationId ?? null,
+      ...(urlChanged ? { url: canonicalUrl } : {}),
       updateAt: new Date(),
     })
     .where(
@@ -125,7 +157,10 @@ export async function applyScrapeResult(
           isNull(productsShopsPrices.currentPrice),
           ne(productsShopsPrices.currentPrice, result.currentPrice),
           sql`${productsShopsPrices.regularPrice} IS DISTINCT FROM ${result.regularPrice}`,
-          sql`${productsShopsPrices.locationId} IS DISTINCT FROM ${result.locationId ?? null}`
+          sql`${productsShopsPrices.locationId} IS DISTINCT FROM ${result.locationId ?? null}`,
+          ...(urlChanged
+            ? [sql`${productsShopsPrices.url} IS DISTINCT FROM ${canonicalUrl}`]
+            : [])
         )
       )
     )

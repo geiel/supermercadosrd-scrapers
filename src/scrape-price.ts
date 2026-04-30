@@ -23,7 +23,7 @@ export async function scrapePrice(
     case 2:
       return scrapeNacionalPrice(input, requestConfig);
     case 3:
-      return scrapeJumboPrice(input);
+      return scrapeJumboPrice(input, requestConfig);
     case 7:
       return scrapeMercaJumboPrice(input, requestConfig);
     case 4:

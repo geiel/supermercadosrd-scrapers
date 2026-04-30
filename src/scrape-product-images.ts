@@ -21,7 +21,7 @@ export async function scrapeProductImages(
     case 2:
       return scrapeNacionalImages(input, requestConfig);
     case 3:
-      return scrapeJumboImages(input);
+      return scrapeJumboImages(input, requestConfig);
     case 7:
       return scrapeMercaJumboImages(input, requestConfig);
     case 4:
