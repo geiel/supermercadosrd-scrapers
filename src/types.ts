@@ -1,4 +1,4 @@
-export type ShopId = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export type ShopId = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 export type ShopName =
   | "sirena"
@@ -7,7 +7,8 @@ export type ShopName =
   | "plaza_lama"
   | "pricesmart"
   | "bravo"
-  | "merca_jumbo";
+  | "merca_jumbo"
+  | "garrido";
 
 export type ScrapePriceInput = {
   shopId: ShopId;

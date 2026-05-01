@@ -30,5 +30,12 @@ export async function scrapeProductImages(
       return scrapePricesmartImages(input, requestConfig);
     case 6:
       return scrapeBravoImages(input, requestConfig);
+    case 8:
+      return {
+        status: "not_found",
+        shopId: 8,
+        shopName: "garrido",
+        reason: "image_scraper_not_supported",
+      };
   }
 }

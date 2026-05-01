@@ -406,6 +406,24 @@ export function getPricesmartHeaders(): Record<string, string> {
   };
 }
 
+export function getGarridoHeaders(): Record<string, string> {
+  const userAgent = getRandomUserAgent();
+
+  return {
+    ...getCommonChromeHeaders(userAgent),
+    Accept: "*/*",
+    "Content-Type": "application/json",
+    Origin: "https://www.garrido.com.do",
+    Referer: "https://www.garrido.com.do/",
+    "apollographql-client-name": "Ecommerce Moira client",
+    "apollographql-client-version": "0.19.46",
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "cross-site",
+    priority: "u=1, i",
+  };
+}
+
 export function getBravoHeaders(): Record<string, string> {
   return {
     Host: "bravova-api.superbravo.com.do",
@@ -429,6 +447,8 @@ export function getHeadersByShopId(shopId: ShopId): Record<string, string> {
       return getJumboHeaders();
     case 7:
       return getNacionalHeaders();
+    case 8:
+      return getGarridoHeaders();
     case 4:
       return getPlazaLamaHeaders();
     case 5:

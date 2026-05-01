@@ -2,6 +2,7 @@ import {
   scrapeBravoPrice,
   scrapeJumboPrice,
   scrapeMercaJumboPrice,
+  scrapeGarridoPrice,
   scrapeNacionalPrice,
   scrapePlazaLamaPrice,
   scrapePricesmartPrice,
@@ -32,5 +33,7 @@ export async function scrapePrice(
       return scrapePricesmartPrice(input, requestConfig);
     case 6:
       return scrapeBravoPrice(input, requestConfig);
+    case 8:
+      return scrapeGarridoPrice(input, requestConfig);
   }
 }
