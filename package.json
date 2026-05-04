@@ -32,6 +32,7 @@
     "scrape:sync-sirena-catalog": "tsx src/jobs/sync-sirena-catalog.ts",
     "scrape:recover-hidden-products": "tsx src/jobs/recover-hidden-products.ts",
     "scrape:broken-images-batch": "tsx src/jobs/fix-broken-images-batch.ts",
+    "scrape:revert-bravo-second-images": "tsx src/jobs/revert-bravo-second-image-fixes.ts",
     "scrape:deals": "tsx src/jobs/scrape-deals.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

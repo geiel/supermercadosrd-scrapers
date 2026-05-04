@@ -205,8 +205,20 @@ Behavior:
 
 - Reads unresolved rows from `product_broken_images`
 - Resolves the current primary image from `product_images` or `products.image`
+- Verifies the reported image is still broken before replacing it; stale reports
+  are deleted without changing the product image set
 - Re-fetches candidate images from each linked supermarket using the same shop-specific extractors used by the main project
 - If it finds a different image, it updates `products.image`, updates `product_images.primary`, and deletes the related rows from `product_broken_images`
+
+### One-off repair: Bravo second images
+
+```bash
+pnpm scrape:revert-bravo-second-images
+```
+
+Restores historical Bravo `_2` image rows that were mistakenly replaced by
+Bravo `_1` rows, but only when the original `_2` URL still loads. Use
+`--dry-run` to inspect the restore/remove pairs without writing changes.
 
 ## GitHub Actions workflows
 

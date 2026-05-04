@@ -1,4 +1,5 @@
 import { fetchWithRetry, getBravoHeaders } from "../http-client.js";
+import { remoteImageExists } from "../image-exists.js";
 import { dedupeUrls, isRecord, normalizeString } from "../image-utils.js";
 import type {
   FetchWithRetryConfig,
@@ -38,41 +39,6 @@ function buildBravoImageUrl(
   return `${bravoImageBaseUrl}/${encodeURIComponent(externalId)}_${suffix}.png?v=${encodeURIComponent(version)}`;
 }
 
-async function imageExists(url: string) {
-  const requestInit = {
-    cache: "no-store" as const,
-    signal: AbortSignal.timeout(bravoImageTimeoutMs),
-  };
-
-  try {
-    const headResponse = await fetch(url, {
-      method: "HEAD",
-      ...requestInit,
-    });
-
-    if (headResponse.ok) {
-      return true;
-    }
-
-    if (headResponse.status !== 405) {
-      return false;
-    }
-  } catch {
-    // Continue with GET fallback below.
-  }
-
-  try {
-    const getResponse = await fetch(url, {
-      method: "GET",
-      headers: { Range: "bytes=0-0" },
-      ...requestInit,
-    });
-    return getResponse.ok;
-  } catch {
-    return false;
-  }
-}
-
 async function discoverBravoImagesByVersion(
   externalId: string,
   version: string
@@ -82,7 +48,9 @@ async function discoverBravoImagesByVersion(
 
   for (let suffix = 1; suffix <= bravoMaxImageSuffix; suffix += 1) {
     const imageUrl = buildBravoImageUrl(externalId, suffix, version);
-    const exists = await imageExists(imageUrl);
+    const exists = await remoteImageExists(imageUrl, {
+      timeoutMs: bravoImageTimeoutMs,
+    });
 
     if (exists) {
       discovered.push(imageUrl);

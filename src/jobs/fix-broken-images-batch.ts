@@ -4,6 +4,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { applyProductImageFix, deleteBrokenImageReportsByImage } from "../db/apply-product-image-fix.js";
 import { closeDb, db } from "../db/client.js";
 import { productImages, productsShopsPrices } from "../db/schema.js";
+import { remoteImageExists } from "../image-exists.js";
 import { getComparableImageKey, normalizeString } from "../image-utils.js";
 import { scrapeProductImages } from "../scrape-product-images.js";
 import type { FetchWithRetryConfig, ShopId } from "../types.js";
@@ -385,6 +386,24 @@ async function processBrokenImageCandidate(
 
     console.log(
       `[DONE/ALREADY_FIXED] brokenImageId=${candidate.brokenImageId} productId=${candidate.productId} reason=image_not_in_products_or_product_images`
+    );
+
+    return "already_fixed" as const;
+  }
+
+  if (
+    (brokenProductImageRow || productTableImageKey === reportedImageKey) &&
+    (await remoteImageExists(reportedImageUrl, {
+      timeoutMs: requestConfig.timeoutMs,
+    }))
+  ) {
+    await deleteBrokenImageReportsByImage(
+      candidate.productId,
+      candidate.reportedImageUrl
+    );
+
+    console.log(
+      `[DONE/STILL_WORKING] brokenImageId=${candidate.brokenImageId} productId=${candidate.productId} reason=reported_image_still_loads deletedReport=true`
     );
 
     return "already_fixed" as const;
