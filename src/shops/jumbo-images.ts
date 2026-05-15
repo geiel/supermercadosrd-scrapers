@@ -3,40 +3,27 @@ import {
   fetchWithRetryDetailed,
   getJumboHeaders,
 } from "../http-client.js";
-import {
-  dedupeComparableUrls,
-  normalizeNacionalImageUrl,
-} from "../image-utils.js";
 import { extractJumboSkuCandidates } from "../recovery/shared.js";
 import type {
   FetchWithRetryConfig,
   ScrapeProductImagesInput,
   ScrapeProductImagesResult,
 } from "../types.js";
+import {
+  extractJumboImageUrls,
+  JUMBO_GRAPHQL_URL,
+  jumboImageGraphqlFields,
+  resolveJumboStoreCode,
+} from "./jumbo-shared.js";
 
 const shopId = 3;
 const shopName = "jumbo";
-const JUMBO_GRAPHQL_URL = "https://jumbo.com.do/graphql";
-const JUMBO_STORE_CODE_ENV = "JUMBO_STORE_CODE";
-const DEFAULT_JUMBO_STORE_CODE = "jumbo";
 
 const jumboImagesQuery = `query JumboImagesBySku($sku: String!) {
   products(filter: { sku: { eq: $sku } }) {
     items {
       sku
-      image {
-        url
-      }
-      small_image {
-        url
-      }
-      thumbnail {
-        url
-      }
-      media_gallery {
-        url
-        disabled
-      }
+${jumboImageGraphqlFields}
     }
   }
 }`;
@@ -81,11 +68,6 @@ const jumboImagesResponseSchema = z.object({
     }),
   }),
 });
-
-function resolveJumboStoreCode() {
-  const storeCode = process.env[JUMBO_STORE_CODE_ENV]?.trim();
-  return storeCode || DEFAULT_JUMBO_STORE_CODE;
-}
 
 export async function scrapeJumboImages(
   input: ScrapeProductImagesInput,
@@ -168,14 +150,7 @@ export async function scrapeJumboImages(
       continue;
     }
 
-    const images = dedupeComparableUrls([
-      product.image?.url,
-      product.small_image?.url,
-      product.thumbnail?.url,
-      ...(product.media_gallery ?? [])
-        .filter((image) => !image.disabled)
-        .map((image) => image.url),
-    ]).map(normalizeNacionalImageUrl);
+    const images = extractJumboImageUrls(product);
 
     if (images.length === 0) {
       return {

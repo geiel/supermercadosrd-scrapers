@@ -14,11 +14,14 @@ import type {
   ScrapePriceInput,
   ScrapePriceResult,
 } from "../types.js";
+import {
+  extractJumboImageUrls,
+  JUMBO_GRAPHQL_URL,
+  jumboImageGraphqlFields,
+  resolveJumboStoreCode,
+} from "./jumbo-shared.js";
 
 const shopId = 3;
-const JUMBO_GRAPHQL_URL = "https://jumbo.com.do/graphql";
-const JUMBO_STORE_CODE_ENV = "JUMBO_STORE_CODE";
-const DEFAULT_JUMBO_STORE_CODE = "jumbo";
 
 const jumboProductQuery = `query JumboProductBySku($sku: String!) {
   products(filter: { sku: { eq: $sku } }) {
@@ -26,6 +29,7 @@ const jumboProductQuery = `query JumboProductBySku($sku: String!) {
       sku
       name
       url_key
+${jumboImageGraphqlFields}
       price_range {
         minimum_price {
           final_price {
@@ -49,6 +53,33 @@ const jumboProductResponseSchema = z.object({
             sku: z.string(),
             name: z.string().nullable().optional(),
             url_key: z.string().nullable().optional(),
+            image: z
+              .object({
+                url: z.string().nullable().optional(),
+              })
+              .nullable()
+              .optional(),
+            small_image: z
+              .object({
+                url: z.string().nullable().optional(),
+              })
+              .nullable()
+              .optional(),
+            thumbnail: z
+              .object({
+                url: z.string().nullable().optional(),
+              })
+              .nullable()
+              .optional(),
+            media_gallery: z
+              .array(
+                z.object({
+                  url: z.string().nullable().optional(),
+                  disabled: z.boolean().nullable().optional(),
+                })
+              )
+              .nullable()
+              .optional(),
             price_range: z
               .object({
                 minimum_price: z.object({
@@ -75,9 +106,20 @@ function toPriceString(value: number | null | undefined) {
     : String(value);
 }
 
-function resolveJumboStoreCode() {
-  const storeCode = process.env[JUMBO_STORE_CODE_ENV]?.trim();
-  return storeCode || DEFAULT_JUMBO_STORE_CODE;
+type JumboProduct =
+  z.infer<typeof jumboProductResponseSchema>["data"]["products"]["items"][number];
+
+function buildScrapeableJumboProductUrl(product: JumboProduct) {
+  const urlFromKey = product.url_key
+    ? buildJumboProductUrl(product.url_key)
+    : null;
+  if (urlFromKey && extractJumboSkuCandidates(urlFromKey).length > 0) {
+    return urlFromKey;
+  }
+
+  return product.name
+    ? buildJumboProductUrlFromNameAndSku(product.name, product.sku)
+    : null;
 }
 
 export async function scrapeJumboPrice(
@@ -142,12 +184,16 @@ export async function scrapeJumboPrice(
       continue;
     }
 
-    const finalPrice = toPriceString(
-      product.price_range?.minimum_price.final_price.value ?? null
-    );
+    const finalPriceValue =
+      product.price_range?.minimum_price.final_price.value ?? null;
+    const finalPrice = toPriceString(finalPriceValue);
 
     if (!finalPrice) {
       return error(shopId, "price_not_found", false, false);
+    }
+
+    if (finalPriceValue === 0 && extractJumboImageUrls(product).length === 0) {
+      return notFound(shopId, "price_zero_without_images", true);
     }
 
     const regularPriceValue =
@@ -164,11 +210,7 @@ export async function scrapeJumboPrice(
       finalPrice,
       regularPrice,
       null,
-      product.url_key
-        ? buildJumboProductUrl(product.url_key)
-        : product.name
-          ? buildJumboProductUrlFromNameAndSku(product.name, product.sku)
-          : null
+      buildScrapeableJumboProductUrl(product)
     );
   }
 
