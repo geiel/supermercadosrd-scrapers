@@ -18,10 +18,11 @@ Standalone public project for Dominican supermarket scraping.
   - `products_prices_history` inserts when price changes
   - hide/show logic for unavailable products
   - optional product revalidation endpoint call
-- Two production jobs exposed as GitHub `workflow_dispatch`:
+- Production jobs exposed through npm scripts and GitHub Actions:
   - `scrape:prices-batch` (recommended cadence: every 15 minutes)
   - `scrape:sync-nacional-catalog` (recommended cadence: every 6-12 hours)
   - `scrape:sync-sirena-catalog` (recommended cadence: every 6-12 hours)
+  - `scrape:sync-ritmo-sftp-prices` (recommended cadence: daily after Ritmo uploads)
   - `scrape:recover-hidden-products` (recommended cadence: every 6-12 hours)
   - `scrape:broken-images-batch` (recommended cadence: every 30-60 minutes)
   - `scrape:deals` (recommended cadence: every 3 hours)
@@ -37,6 +38,12 @@ Optional:
 - `REVALIDATION_SECRET`
 - `MERCA_JUMBO_API_URL`
 - `MERCA_JUMBO_STORE_CODE`
+- `SFPT_PASSWORD`
+- `RITMO_SFTP_HOST` (defaults to `76.13.108.74`)
+- `RITMO_SFTP_PORT` (defaults to `2222`)
+- `RITMO_SFTP_USERNAME` (defaults to `ritmo`)
+- `RITMO_SFTP_DIR` (defaults to `/upload`)
+- `RITMO_SHOP_ID` (defaults to `9`)
 
 `Merca Jumbo` uses a private Nacional store view. This public repo intentionally
 reads its runtime identifiers from environment variables instead of committing
@@ -149,8 +156,6 @@ Behavior:
 - These proposals are intended for `/admin/product-recovery-reviews` in the main app
 - Does not auto-apply URL changes directly
 
-## Job 5: Broken Images Batch (recommended every 30-60 min)
-
 ## Job 5: Sirena Catalog Sync (recommended every 6-12 hours)
 
 ```bash
@@ -220,6 +225,36 @@ Restores historical Bravo `_2` image rows that were mistakenly replaced by
 Bravo `_1` rows, but only when the original `_2` URL still loads. Use
 `--dry-run` to inspect the restore/remove pairs without writing changes.
 
+## Job 7: Ritmo SFTP Price Sync (recommended daily)
+
+```bash
+pnpm scrape:sync-ritmo-sftp-prices
+```
+
+Defaults:
+
+- `--host 76.13.108.74`
+- `--port 2222`
+- `--username ritmo`
+- `--remote-dir /upload`
+- optional `--remote-file Catalogo_Productos_PROD_NC44_YYYYMMDD.csv`
+- optional `--dry-run`
+- optional `--list`
+
+Behavior:
+
+- Connects to Ritmo's SFTP and downloads the most recently modified CSV in
+  `/upload`.
+- Parses `SKU`, `Descripcion`, `Codigo de Barras`, `Precio`, and `Marca`.
+- Matches existing Ritmo rows by `products_shops_prices.api =
+  ritmo://sku/<SKU>`.
+- Updates current prices and inserts `products_prices_history` only when the
+  price changed.
+- Unhides matched SKUs with a positive price.
+- Hides existing Ritmo rows whose SKU is missing from the CSV or whose CSV
+  price is `0`/invalid.
+- Leaves new, unlinked SKUs skipped for the admin linking workflow.
+
 ## GitHub Actions workflows
 
 - `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-prices-batch.yml`
@@ -227,9 +262,12 @@ Bravo `_1` rows, but only when the original `_2` URL still loads. Use
 - `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-recover-hidden-products.yml`
 - `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-sync-nacional-catalog.yml`
 - `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-sync-sirena-catalog.yml`
-  - All are `workflow_dispatch` only (no internal cron schedule)
+- `/Users/geielpeguero/Desktop/Geiel/supermercadosrd-v2/supermercadosrd-scrapers/.github/workflows/scrape-sync-ritmo-sftp-prices.yml`
+  - All are `workflow_dispatch` only except Ritmo, which also runs daily at
+    `14:30 UTC`.
 
-These workflows expect `DATABASE_URL` in repository secrets.
+These workflows expect `DATABASE_URL` in repository secrets. Ritmo also expects
+`SFPT_PASSWORD` in the `Production` environment secrets.
 
 ## Notes
 

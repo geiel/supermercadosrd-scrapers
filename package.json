@@ -30,6 +30,7 @@
     "scrape:prices-batch": "tsx src/jobs/scrape-prices-batch.ts",
     "scrape:sync-nacional-catalog": "tsx src/jobs/sync-nacional-catalog.ts",
     "scrape:sync-sirena-catalog": "tsx src/jobs/sync-sirena-catalog.ts",
+    "scrape:sync-ritmo-sftp-prices": "tsx src/jobs/sync-ritmo-sftp-prices.ts",
     "scrape:recover-hidden-products": "tsx src/jobs/recover-hidden-products.ts",
     "scrape:broken-images-batch": "tsx src/jobs/fix-broken-images-batch.ts",
     "scrape:revert-bravo-second-images": "tsx src/jobs/revert-bravo-second-image-fixes.ts",
@@ -39,10 +40,12 @@
   "dependencies": {
     "@sparticuz/chromium-min": "^143.0.4",
     "cheerio": "^1.1.2",
+    "csv-parse": "^6.2.1",
     "drizzle-orm": "^0.44.6",
     "postgres": "^3.4.7",
     "puppeteer": "^24.35.0",
     "puppeteer-core": "^24.35.0",
+    "ssh2-sftp-client": "^12.1.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {
