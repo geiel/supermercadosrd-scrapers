@@ -9,6 +9,8 @@ export type RitmoSftpConfig = {
   password: string;
   remoteDir: string;
   readyTimeoutMs: number;
+  maxConnectionAttempts: number;
+  retryDelayMs: number;
 };
 
 export type RitmoSftpFile = {
@@ -66,20 +68,75 @@ async function toBuffer(value: Buffer | string | Readable) {
   return streamToBuffer(value);
 }
 
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isRetryableSftpError(error: unknown) {
+  const message = getErrorMessage(error).toLowerCase();
+
+  return (
+    message.includes("timed out") ||
+    message.includes("timeout") ||
+    message.includes("econnreset") ||
+    message.includes("econnrefused") ||
+    message.includes("connection lost") ||
+    message.includes("connection closed")
+  );
+}
+
+async function withSftpClient<T>(
+  config: RitmoSftpConfig,
+  operationName: string,
+  operation: (client: SftpClient) => Promise<T>
+) {
+  const maxAttempts = Math.max(1, Math.floor(config.maxConnectionAttempts));
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const client = new SftpClient("ritmo-price-sync");
+
+    try {
+      await client.connect({
+        host: config.host,
+        port: config.port,
+        username: config.username,
+        password: config.password,
+        readyTimeout: config.readyTimeoutMs,
+      });
+
+      return await operation(client);
+    } catch (error) {
+      lastError = error;
+
+      if (attempt >= maxAttempts || !isRetryableSftpError(error)) {
+        throw error;
+      }
+
+      console.warn(
+        `[WARN] Ritmo SFTP ${operationName} attempt ${attempt}/${maxAttempts} failed: ${getErrorMessage(
+          error
+        )}. Retrying in ${config.retryDelayMs}ms`
+      );
+      await sleep(config.retryDelayMs);
+    } finally {
+      await client.end().catch(() => undefined);
+    }
+  }
+
+  throw lastError;
+}
+
 export async function listRitmoSftpCsvFiles(
   config: RitmoSftpConfig
 ): Promise<RitmoSftpFile[]> {
-  const client = new SftpClient("ritmo-price-sync");
-
-  try {
-    await client.connect({
-      host: config.host,
-      port: config.port,
-      username: config.username,
-      password: config.password,
-      readyTimeout: config.readyTimeoutMs,
-    });
-
+  return withSftpClient(config, "list", async (client) => {
     const files = await client.list(config.remoteDir);
     return files
       .filter(isCsvFile)
@@ -88,26 +145,14 @@ export async function listRitmoSftpCsvFiles(
         const timeDiff = right.modifyTime - left.modifyTime;
         return timeDiff !== 0 ? timeDiff : right.name.localeCompare(left.name);
       });
-  } finally {
-    await client.end();
-  }
+  });
 }
 
 export async function downloadRitmoSftpCsv(
   config: RitmoSftpConfig,
   remoteFile?: string
 ): Promise<RitmoSftpDownload> {
-  const client = new SftpClient("ritmo-price-sync");
-
-  try {
-    await client.connect({
-      host: config.host,
-      port: config.port,
-      username: config.username,
-      password: config.password,
-      readyTimeout: config.readyTimeoutMs,
-    });
-
+  return withSftpClient(config, "download", async (client) => {
     const file =
       remoteFile !== undefined
         ? {
@@ -137,7 +182,5 @@ export async function downloadRitmoSftpCsv(
       },
       content,
     };
-  } finally {
-    await client.end();
-  }
+  });
 }

@@ -240,6 +240,9 @@ Defaults:
 - optional `--remote-file Catalogo_Productos_PROD_NC44_YYYYMMDD.csv`
 - optional `--dry-run`
 - optional `--list`
+- optional `--ready-timeout 60000`
+- optional `--connection-attempts 3`
+- optional `--retry-delay 5000`
 
 Behavior:
 

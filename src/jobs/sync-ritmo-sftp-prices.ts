@@ -92,8 +92,19 @@ function getSftpConfig(args: Map<string, string>): RitmoSftpConfig {
       "/upload",
     readyTimeoutMs: parseNumber(
       args.get("--ready-timeout") ?? optionalEnv("RITMO_SFTP_READY_TIMEOUT"),
-      20000,
+      60000,
       "SFTP ready timeout"
+    ),
+    maxConnectionAttempts: parseNumber(
+      args.get("--connection-attempts") ??
+        optionalEnv("RITMO_SFTP_CONNECTION_ATTEMPTS"),
+      3,
+      "SFTP connection attempts"
+    ),
+    retryDelayMs: parseNumber(
+      args.get("--retry-delay") ?? optionalEnv("RITMO_SFTP_RETRY_DELAY"),
+      5000,
+      "SFTP retry delay"
     ),
   };
 }
