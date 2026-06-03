@@ -12,6 +12,8 @@ Standalone public project for Dominican supermarket scraping.
   - PriceSmart (`shopId=5`)
   - Bravo (`shopId=6`)
   - Merca Jumbo (`shopId=7`, private runtime config required)
+  - Garrido (`shopId=8`)
+  - Carrefour (`shopId=10`)
 - Drizzle + Postgres DB integration
 - DB update behavior aligned with `supermercados-rd` jobs:
   - `products_shops_prices` read/update
@@ -44,6 +46,8 @@ Optional:
 - `RITMO_SFTP_USERNAME` (defaults to `ritmo`)
 - `RITMO_SFTP_DIR` (defaults to `/upload`)
 - `RITMO_SHOP_ID` (defaults to `9`)
+- `CARREFOUR_TYPESENSE_API_KEY` (defaults to the public Carrefour key)
+- `CARREFOUR_PLAZA_DUARTE_COLLECTION_ID` (defaults to Plaza Duarte)
 
 `Merca Jumbo` uses a private Nacional store view. This public repo intentionally
 reads its runtime identifiers from environment variables instead of committing

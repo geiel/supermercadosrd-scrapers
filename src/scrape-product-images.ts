@@ -37,5 +37,12 @@ export async function scrapeProductImages(
         shopName: "garrido",
         reason: "image_scraper_not_supported",
       };
+    case 10:
+      return {
+        status: "not_found",
+        shopId: 10,
+        shopName: "carrefour",
+        reason: "image_scraper_not_supported",
+      };
   }
 }

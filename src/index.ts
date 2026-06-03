@@ -12,6 +12,7 @@ export {
   getPlazaLamaHeaders,
   getPricesmartHeaders,
   getBravoHeaders,
+  getCarrefourHeaders,
 } from "./http-client.js";
 
 export type {
@@ -39,4 +40,5 @@ export {
   scrapePlazaLamaPrice,
   scrapePricesmartPrice,
   scrapeBravoPrice,
+  scrapeCarrefourPrice,
 } from "./shops/index.js";
