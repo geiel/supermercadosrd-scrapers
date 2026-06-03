@@ -1,4 +1,4 @@
-export type ShopId = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+export type ShopId = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 10;
 
 export type ShopName =
   | "sirena"
@@ -8,12 +8,14 @@ export type ShopName =
   | "pricesmart"
   | "bravo"
   | "merca_jumbo"
-  | "garrido";
+  | "garrido"
+  | "carrefour";
 
 export type ScrapePriceInput = {
   shopId: ShopId;
   url: string;
   api?: string | null;
+  locationId?: string | null;
 };
 
 export type FetchWithRetryConfig = {

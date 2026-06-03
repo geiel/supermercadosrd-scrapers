@@ -8,10 +8,10 @@ import { scrapePrice } from "../scrape-price.js";
 import type { ShopId } from "../types.js";
 import { randomDelay } from "../utils.js";
 
-const shopIds = [1, 2, 3, 4, 5, 6, 7, 8] as const;
+const shopIds = [1, 2, 3, 4, 5, 6, 7, 8, 10] as const;
 
 function isShopId(value: number): value is ShopId {
-  return value >= 1 && value <= 8;
+  return shopIds.includes(value as ShopId);
 }
 
 function parseArgs(argv: string[]) {
@@ -65,6 +65,7 @@ async function processShopPrice(
       shopId: shopPrice.shopId,
       url: shopPrice.url,
       api: shopPrice.api,
+      locationId: shopPrice.locationId,
     },
     {
       timeoutMs,
