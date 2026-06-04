@@ -49,6 +49,8 @@ jobs:
           PLAZA_LAMA_DPL_API_KEY: ${{ secrets.PLAZA_LAMA_DPL_API_KEY }}
           PRICESMART_PRODUCT_API_URL: ${{ secrets.PRICESMART_PRODUCT_API_URL }}
           PRICESMART_DISCOVERY_API_URL: ${{ secrets.PRICESMART_DISCOVERY_API_URL }}
+          CARREFOUR_TYPESENSE_API_KEY: ${{ secrets.CARREFOUR_TYPESENSE_API_KEY }}
+          CARREFOUR_PLAZA_DUARTE_COLLECTION_ID: ${{ secrets.CARREFOUR_PLAZA_DUARTE_COLLECTION_ID }}
         run: |
           pnpm scrape:deals \
             --delay-min 600 \
