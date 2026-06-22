@@ -19,6 +19,7 @@ const query = `query GetProductsBySKU($getProductsBySKUInput: GetProductsBySKUIn
   getProductsBySKU(getProductsBySKUInput: $getProductsBySKUInput) {
     sku
     price
+    clickMultiplier
     isActive
     isAvailable
     promotion {
@@ -33,6 +34,7 @@ const query = `query GetProductsBySKU($getProductsBySKUInput: GetProductsBySKUIn
 const productSchema = z.object({
   sku: z.string(),
   price: z.number().nullable().optional(),
+  clickMultiplier: z.number().nullable().optional(),
   isActive: z.boolean().nullable().optional(),
   isAvailable: z.boolean().nullable().optional(),
   promotion: z
@@ -138,6 +140,27 @@ function getActivePrice(product: GarridoProduct) {
   return typeof promotionPrice === "number" ? promotionPrice : product.price;
 }
 
+function getPriceMultiplier(product: GarridoProduct) {
+  const clickMultiplier = product.clickMultiplier;
+
+  if (
+    typeof clickMultiplier !== "number" ||
+    !Number.isFinite(clickMultiplier) ||
+    clickMultiplier <= 1
+  ) {
+    return 1;
+  }
+
+  return clickMultiplier;
+}
+
+function toGarridoPriceString(price: number, product: GarridoProduct) {
+  const displayPrice = price * getPriceMultiplier(product);
+  const roundedPrice = Math.round((displayPrice + Number.EPSILON) * 100) / 100;
+
+  return String(roundedPrice);
+}
+
 export async function scrapeGarridoPrice(
   input: ScrapePriceInput,
   requestConfig?: FetchWithRetryConfig
@@ -170,7 +193,7 @@ export async function scrapeGarridoPrice(
 
       const regularPrice =
         typeof product.price === "number" && product.price !== currentPrice
-          ? String(product.price)
+          ? toGarridoPriceString(product.price, product)
           : null;
       const canonicalUrl = `https://www.garrido.com.do/p/${encodeURIComponent(
         product.sku || sku
@@ -178,7 +201,7 @@ export async function scrapeGarridoPrice(
 
       return ok(
         shopId,
-        String(currentPrice),
+        toGarridoPriceString(currentPrice, product),
         regularPrice,
         storeReference || GARRIDO_DEFAULT_STORE_REFERENCE,
         canonicalUrl
