@@ -153,7 +153,7 @@ function appendSearchParams(endpoint: string, params: URLSearchParams) {
 }
 
 function toPriceString(value: number | null | undefined) {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return null;
   }
 

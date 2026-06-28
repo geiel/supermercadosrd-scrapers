@@ -28,6 +28,11 @@ const productSchema = z
     })
   );
 
+function isPositivePriceString(value: string | null | undefined) {
+  const price = Number(value);
+  return Number.isFinite(price) && price > 0;
+}
+
 export async function scrapeSirenaPrice(
   input: ScrapePriceInput,
   requestConfig?: FetchWithRetryConfig
@@ -75,5 +80,16 @@ export async function scrapeSirenaPrice(
     return notFound(shopId, parsed.data.message, true);
   }
 
-  return ok(shopId, parsed.data.product.price, parsed.data.product.regular_price);
+  const currentPrice = parsed.data.product.price;
+  if (!isPositivePriceString(currentPrice)) {
+    return notFound(shopId, "price_not_found", true);
+  }
+
+  const regularPrice = parsed.data.product.regular_price;
+
+  return ok(
+    shopId,
+    currentPrice,
+    isPositivePriceString(regularPrice) ? regularPrice : currentPrice
+  );
 }
