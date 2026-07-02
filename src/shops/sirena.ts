@@ -4,6 +4,7 @@ import { error, notFound, ok } from "../result.js";
 import {
   normalizeSirenaVtexProduct,
   parseSirenaVtexProductsPayload,
+  withSirenaVtexSalesChannel,
 } from "../sirena-vtex.js";
 import type {
   FetchWithRetryConfig,
@@ -42,7 +43,7 @@ export async function scrapeSirenaPrice(
   }
 
   const response = await fetchWithRetry(
-    input.api ?? input.url,
+    withSirenaVtexSalesChannel(input.api ?? input.url),
     { headers: getSirenaHeaders() },
     requestConfig
   );

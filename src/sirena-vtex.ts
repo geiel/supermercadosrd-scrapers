@@ -8,6 +8,7 @@ import { fetchWithRetry, getSirenaHeaders } from "./http-client.js";
 import type { FetchWithRetryConfig } from "./types.js";
 
 const SIRENA_BASE_URL = "https://www.sirena.do";
+const SIRENA_SALES_CHANNEL = "1";
 const CATEGORY_TREE_DEPTH = 20;
 const DEFAULT_CATEGORY_PAGE_SIZE = 50;
 
@@ -152,6 +153,32 @@ function appendSearchParams(endpoint: string, params: URLSearchParams) {
   return `${endpoint}${endpoint.includes("?") ? "&" : "?"}${params.toString()}`;
 }
 
+export function withSirenaVtexSalesChannel(url: string) {
+  const normalizedUrl = normalizeString(url);
+  if (!normalizedUrl) {
+    return normalizedUrl;
+  }
+
+  try {
+    const parsedUrl = new URL(normalizedUrl, SIRENA_BASE_URL);
+    const isSirenaCatalogSearch =
+      parsedUrl.hostname === "www.sirena.do" &&
+      parsedUrl.pathname.startsWith("/api/catalog_system/pub/products/search");
+
+    if (
+      isSirenaCatalogSearch &&
+      !parsedUrl.searchParams.has("sc") &&
+      !parsedUrl.searchParams.has("salesChannel")
+    ) {
+      parsedUrl.searchParams.set("sc", SIRENA_SALES_CHANNEL);
+    }
+
+    return parsedUrl.toString();
+  } catch {
+    return normalizedUrl;
+  }
+}
+
 function toPriceString(value: number | null | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return null;
@@ -269,7 +296,7 @@ async function fetchSirenaVtexJson(
   requestConfig?: FetchWithRetryConfig
 ): Promise<unknown> {
   const response = await fetchWithRetry(
-    url,
+    withSirenaVtexSalesChannel(url),
     { headers: getSirenaHeaders() },
     requestConfig
   );
