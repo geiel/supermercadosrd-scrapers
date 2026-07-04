@@ -23,7 +23,8 @@ export function ok(
   currentPrice: string,
   regularPrice: string | null,
   locationId: string | null = null,
-  canonicalUrl?: string | null
+  canonicalUrl?: string | null,
+  productUnitUpdate?: ScrapePriceSuccess["productUnitUpdate"]
 ): ScrapePriceSuccess {
   return {
     status: "ok",
@@ -33,6 +34,7 @@ export function ok(
     regularPrice,
     locationId,
     canonicalUrl: canonicalUrl ?? undefined,
+    productUnitUpdate,
   };
 }
 

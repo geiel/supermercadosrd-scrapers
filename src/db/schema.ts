@@ -13,6 +13,10 @@ export const products = pgTable("products", {
   id: integer("id").primaryKey(),
   name: text("name"),
   image: text("image"),
+  unit: text("unit"),
+  brandId: integer("brandId"),
+  baseUnit: text("baseUnit"),
+  baseUnitAmount: numeric("baseUnitAmount"),
   deleted: boolean("deleted"),
 });
 

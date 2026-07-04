@@ -3,7 +3,7 @@
 import { eq, sql } from "drizzle-orm";
 import { applyScrapeResult, type ShopPriceRow } from "../db/apply-scrape-result.js";
 import { closeDb, db } from "../db/client.js";
-import { productsShopsPrices, todaysDeals } from "../db/schema.js";
+import { products, productsShopsPrices, todaysDeals } from "../db/schema.js";
 import { scrapePrice } from "../scrape-price.js";
 import type { ShopId } from "../types.js";
 import { randomDelay } from "../utils.js";
@@ -66,6 +66,9 @@ async function processShopPrice(
       url: shopPrice.url,
       api: shopPrice.api,
       locationId: shopPrice.locationId,
+      unit: shopPrice.unit,
+      baseUnit: shopPrice.baseUnit,
+      baseUnitAmount: shopPrice.baseUnitAmount,
     },
     {
       timeoutMs,
@@ -103,9 +106,13 @@ async function main() {
       regularPrice: productsShopsPrices.regularPrice,
       updateAt: productsShopsPrices.updateAt,
       hidden: productsShopsPrices.hidden,
+      unit: products.unit,
+      baseUnit: products.baseUnit,
+      baseUnitAmount: products.baseUnitAmount,
     })
     .from(todaysDeals)
-    .innerJoin(productsShopsPrices, eq(todaysDeals.productId, productsShopsPrices.productId));
+    .innerJoin(productsShopsPrices, eq(todaysDeals.productId, productsShopsPrices.productId))
+    .innerJoin(products, eq(productsShopsPrices.productId, products.id));
 
   const perShopPrices = shopIds.map((shopId) =>
     (shopPrices as ShopPriceRow[]).filter((shopPrice) => shopPrice.shopId === shopId)

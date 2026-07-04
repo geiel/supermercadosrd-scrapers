@@ -66,6 +66,9 @@ async function processShopPrice(
       url: shopPrice.url,
       api: shopPrice.api,
       locationId: shopPrice.locationId,
+      unit: shopPrice.unit,
+      baseUnit: shopPrice.baseUnit,
+      baseUnitAmount: shopPrice.baseUnitAmount,
     },
     {
       timeoutMs,
@@ -131,6 +134,9 @@ async function main() {
             regularPrice: productsShopsPrices.regularPrice,
             updateAt: productsShopsPrices.updateAt,
             hidden: productsShopsPrices.hidden,
+            unit: products.unit,
+            baseUnit: products.baseUnit,
+            baseUnitAmount: products.baseUnitAmount,
           })
           .from(productsShopsPrices)
           .innerJoin(products, eq(productsShopsPrices.productId, products.id))

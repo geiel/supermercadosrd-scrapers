@@ -5,8 +5,10 @@ export const PREFERRED_DO_PRICESMART_LOCATION_IDS = [
   "6806",
   "6802",
 ] as const;
+export const PRICESMART_DO_DEFAULT_LOCATION_ID = "68";
 
 const PRICESMART_DO_LOCATION_NAMES: Record<string, string> = {
+  [PRICESMART_DO_DEFAULT_LOCATION_ID]: "Republica Dominicana",
   "6801": "Los Prados",
   "6802": "Santiago",
   "6804": "Arroyo Hondo",
@@ -35,7 +37,10 @@ export function getPreferredDoPricesmartLocationPrice<
     }
   }
 
-  return undefined;
+  return dominicanRepublicEntries.find(
+    (entry) =>
+      entry.club === PRICESMART_DO_DEFAULT_LOCATION_ID && Number(entry.value) > 0
+  );
 }
 
 export function getPricesmartLocationDisplayName(

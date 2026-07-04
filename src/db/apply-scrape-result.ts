@@ -1,11 +1,12 @@
 import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "./client.js";
 import {
+  products,
   productsPricesHistory,
   productsShopsPrices,
   type ProductShopPriceRow,
 } from "./schema.js";
-import type { ScrapePriceResult } from "../types.js";
+import type { ScrapePriceResult, ScrapePriceSuccess } from "../types.js";
 import { revalidateProduct } from "./revalidate-product.js";
 
 export type ShopPriceRow = Pick<
@@ -19,7 +20,13 @@ export type ShopPriceRow = Pick<
   | "regularPrice"
   | "updateAt"
   | "hidden"
->;
+> & {
+  unit?: string | null;
+  baseUnit?: string | null;
+  baseUnitAmount?: string | number | null;
+};
+
+type ProductUnitUpdate = NonNullable<ScrapePriceSuccess["productUnitUpdate"]>;
 
 function logPrefix(row: ShopPriceRow) {
   return `url=${row.url} productId=${row.productId} shopId=${row.shopId}`;
@@ -80,6 +87,83 @@ async function touchProductPrice(row: ShopPriceRow) {
     );
 }
 
+async function applyProductUnitUpdate(
+  row: ShopPriceRow,
+  unitUpdate: ProductUnitUpdate
+) {
+  const [product] = await db
+    .select({
+      id: products.id,
+      name: products.name,
+      brandId: products.brandId,
+      unit: products.unit,
+    })
+    .from(products)
+    .where(eq(products.id, row.productId))
+    .limit(1);
+
+  if (!product) {
+    console.error(
+      `[ERROR] PriceSmart ${logPrefix(row)} unit_update_product_not_found`
+    );
+    return false;
+  }
+
+  if (!product.name || product.brandId === null) {
+    console.error(
+      `[ERROR] PriceSmart ${logPrefix(row)} unit_update_missing_product_identity`
+    );
+    return false;
+  }
+
+  const [conflictingProduct] = await db
+    .select({ id: products.id })
+    .from(products)
+    .where(
+      and(
+        eq(products.name, product.name),
+        eq(products.unit, unitUpdate.unit),
+        eq(products.brandId, product.brandId),
+        ne(products.id, row.productId)
+      )
+    )
+    .limit(1);
+
+  if (conflictingProduct) {
+    console.error(
+      `[ERROR] PriceSmart ${logPrefix(row)} unit_update_conflicts_with_product=${conflictingProduct.id}`
+    );
+    return false;
+  }
+
+  const updated = await db
+    .update(products)
+    .set({
+      unit: unitUpdate.unit,
+      baseUnit: unitUpdate.baseUnit,
+      baseUnitAmount: unitUpdate.baseUnitAmount,
+    })
+    .where(
+      and(
+        eq(products.id, row.productId),
+        or(
+          sql`${products.unit} IS DISTINCT FROM ${unitUpdate.unit}`,
+          sql`${products.baseUnit} IS DISTINCT FROM ${unitUpdate.baseUnit}`,
+          sql`${products.baseUnitAmount} IS DISTINCT FROM ${unitUpdate.baseUnitAmount}`
+        )
+      )
+    )
+    .returning({ id: products.id });
+
+  if (updated.length > 0) {
+    console.log(
+      `[INFO] PriceSmart ${logPrefix(row)} unit=${product.unit ?? "null"} -> ${unitUpdate.unit}`
+    );
+  }
+
+  return true;
+}
+
 export async function applyScrapeResult(
   row: ShopPriceRow,
   result: ScrapePriceResult
@@ -96,6 +180,17 @@ export async function applyScrapeResult(
     return;
   }
 
+  let updatedProductUnit = false;
+  if (result.productUnitUpdate) {
+    const applied = await applyProductUnitUpdate(row, result.productUnitUpdate);
+    if (!applied) {
+      await hideProductPrice(row);
+      return;
+    }
+
+    updatedProductUnit = true;
+  }
+
   await showProductPrice(row);
 
   const canonicalUrl = result.canonicalUrl?.trim() || null;
@@ -110,6 +205,9 @@ export async function applyScrapeResult(
 
   if (priceAndLocationUnchanged && !urlChanged) {
     await touchProductPrice(row);
+    if (updatedProductUnit) {
+      await revalidateProduct(row.productId);
+    }
     console.log(`[IGNORE] ${result.shopName} ${logPrefix(row)}`);
     return;
   }
@@ -170,6 +268,9 @@ export async function applyScrapeResult(
     });
 
   if (updated.length === 0) {
+    if (updatedProductUnit) {
+      await revalidateProduct(row.productId);
+    }
     console.log(`[DONE/IGNORE] ${result.shopName} ${logPrefix(row)}`);
     return;
   }

@@ -16,6 +16,9 @@ export type ScrapePriceInput = {
   url: string;
   api?: string | null;
   locationId?: string | null;
+  unit?: string | null;
+  baseUnit?: string | null;
+  baseUnitAmount?: string | number | null;
 };
 
 export type FetchWithRetryConfig = {
@@ -31,6 +34,11 @@ export type ScrapePriceSuccess = {
   regularPrice: string | null;
   locationId?: string | null;
   canonicalUrl?: string;
+  productUnitUpdate?: {
+    unit: string;
+    baseUnit: string;
+    baseUnitAmount: string;
+  };
 };
 
 export type ScrapePriceNotFound = {
