@@ -73,6 +73,26 @@ async function showProductPrice(row: ShopPriceRow) {
   await revalidateProduct(row.productId);
 }
 
+async function productHasOtherVisibleShopPrices(row: ShopPriceRow) {
+  const otherShopPrice = await db
+    .select({ productId: productsShopsPrices.productId })
+    .from(productsShopsPrices)
+    .where(
+      and(
+        eq(productsShopsPrices.productId, row.productId),
+        ne(productsShopsPrices.shopId, row.shopId),
+        sql`${productsShopsPrices.currentPrice} IS NOT NULL`,
+        or(
+          isNull(productsShopsPrices.hidden),
+          eq(productsShopsPrices.hidden, false)
+        )
+      )
+    )
+    .limit(1);
+
+  return otherShopPrice.length > 0;
+}
+
 async function touchProductPrice(row: ShopPriceRow) {
   await db
     .update(productsShopsPrices)
@@ -114,6 +134,13 @@ async function applyProductUnitUpdate(
       `[ERROR] PriceSmart ${logPrefix(row)} unit_update_missing_product_identity`
     );
     return false;
+  }
+
+  if (await productHasOtherVisibleShopPrices(row)) {
+    console.log(
+      `[INFO] PriceSmart ${logPrefix(row)} skipped unit update because other shops also sell it`
+    );
+    return true;
   }
 
   const [conflictingProduct] = await db

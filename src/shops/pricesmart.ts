@@ -76,6 +76,7 @@ type PricesmartLocationCandidate = {
   currentPrice: string;
   regularPrice?: string;
   available: boolean | null;
+  soldByWeight: boolean | null;
   sourceUnit: string | null;
   parsedSourceUnit: ParsedUnit | null;
 };
@@ -140,18 +141,37 @@ function getParsedSourceUnit(weight: string | null, weightUnit: string | null) {
   };
 }
 
+function parseBooleanAttribute(value: string | null) {
+  if (value === null) {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true" || normalized === "1") {
+    return true;
+  }
+
+  if (normalized === "false" || normalized === "0") {
+    return false;
+  }
+
+  return null;
+}
+
 function buildLocationCandidates({
   productPrice,
   originalPrice,
   weightEntries,
   weightUnitEntries,
   availabilityEntries,
+  soldByWeightEntries,
 }: {
   productPrice: z.infer<typeof pricesmartPriceSchema>;
   originalPrice: z.infer<typeof pricesmartPriceSchema>;
   weightEntries: PricesmartLocationAttribute[];
   weightUnitEntries: PricesmartLocationAttribute[];
   availabilityEntries: PricesmartLocationAttribute[];
+  soldByWeightEntries: PricesmartLocationAttribute[];
 }) {
   return productPrice
     .filter((entry) => entry.country === "DO" && Number(entry.value) > 0)
@@ -173,17 +193,19 @@ function buildLocationCandidates({
         entry.country,
         entry.club
       );
-      const available =
-        rawAvailability === null
-          ? null
-          : rawAvailability.trim().toLowerCase() === "true";
+      const rawSoldByWeight = getAttributeValue(
+        soldByWeightEntries,
+        entry.country,
+        entry.club
+      );
 
       return {
         country: entry.country,
         club: entry.club,
         currentPrice: entry.value,
         regularPrice: regularPrice?.value,
-        available,
+        available: parseBooleanAttribute(rawAvailability),
+        soldByWeight: parseBooleanAttribute(rawSoldByWeight),
         ...getParsedSourceUnit(weight, weightUnit),
       };
     });
@@ -305,6 +327,7 @@ function getProductUnitUpdate(
 ) {
   if (
     !input.unit?.trim() ||
+    selectedCandidate.soldByWeight !== true ||
     !selectedCandidate.sourceUnit ||
     !selectedCandidate.parsedSourceUnit
   ) {
@@ -419,6 +442,9 @@ export async function scrapePricesmartPrice(
   const availabilityRaw = attributes.find(
     (attr) => attr.name === "product_availability"
   );
+  const soldByWeightRaw = attributes.find(
+    (attr) => attr.name === "sold_by_weight"
+  );
 
   const locationCandidates = buildLocationCandidates({
     productPrice,
@@ -426,6 +452,7 @@ export async function scrapePricesmartPrice(
     weightEntries: parseLocationAttributes(weightRaw?.value),
     weightUnitEntries: parseLocationAttributes(weightUnitRaw?.value),
     availabilityEntries: parseLocationAttributes(availabilityRaw?.value),
+    soldByWeightEntries: parseLocationAttributes(soldByWeightRaw?.value),
   });
   const currentPrice = selectLocationCandidate(locationCandidates, input);
 
@@ -440,6 +467,7 @@ export async function scrapePricesmartPrice(
   );
   const parsedInputUnit = parseProductUnit(input);
   const unitMismatch =
+    currentPrice.soldByWeight === true &&
     !!input.unit?.trim() &&
     !!currentPrice.parsedSourceUnit &&
     !unitsAreClose(parsedInputUnit, currentPrice.parsedSourceUnit) &&
