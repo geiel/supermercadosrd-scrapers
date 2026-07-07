@@ -21,6 +21,21 @@ import type {
 
 const shopId = 5;
 const SOURCE_UNIT_MATCH_RATIO_THRESHOLD = 0.97;
+const PRICESMART_UNIT_UPDATE_CATEGORY_PATTERNS = [
+  /\bcarnes?\b/,
+  /\bcerdo\b/,
+  /\bres\b/,
+  /\bpollo\b/,
+  /\baves?\b/,
+  /\bpescados?\b/,
+  /\bmariscos?\b/,
+  /\bseafood\b/,
+  /\bbeef\b/,
+  /\bpork\b/,
+  /\bchicken\b/,
+  /\bfish\b/,
+  /\bpoultry\b/,
+];
 
 const responseSchema = z.object({
   data: z.object({
@@ -29,6 +44,7 @@ const responseSchema = z.object({
         z.object({
           masterData: z.object({
             current: z.object({
+              categories: z.array(z.unknown()).optional(),
               allVariants: z.array(
                 z.object({
                   attributesRaw: z.array(
@@ -80,6 +96,60 @@ type PricesmartLocationCandidate = {
   sourceUnit: string | null;
   parsedSourceUnit: ParsedUnit | null;
 };
+
+function normalizePricesmartCategoryText(value: unknown) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function collectPricesmartCategoryTexts(categories: unknown[]) {
+  const texts: string[] = [];
+  const seen = new Set<unknown>();
+
+  const visit = (category: unknown) => {
+    if (!category || seen.has(category)) {
+      return;
+    }
+
+    seen.add(category);
+
+    if (Array.isArray(category)) {
+      category.forEach(visit);
+      return;
+    }
+
+    if (typeof category !== "object") {
+      return;
+    }
+
+    const record = category as Record<string, unknown>;
+    for (const key of ["key", "name", "slug"]) {
+      const normalizedText = normalizePricesmartCategoryText(record[key]);
+      if (normalizedText) {
+        texts.push(normalizedText);
+      }
+    }
+
+    visit(record.parent);
+  };
+
+  categories.forEach(visit);
+  return texts;
+}
+
+function isPricesmartUnitUpdateCategory(categories: unknown[] | undefined) {
+  return collectPricesmartCategoryTexts(categories ?? []).some((text) =>
+    PRICESMART_UNIT_UPDATE_CATEGORY_PATTERNS.some((pattern) =>
+      pattern.test(text)
+    )
+  );
+}
 
 function parsePriceEntries(raw: unknown) {
   if (!raw) {
@@ -323,10 +393,12 @@ function getConsistentSourceUnit(candidates: PricesmartLocationCandidate[]) {
 function getProductUnitUpdate(
   candidates: PricesmartLocationCandidate[],
   selectedCandidate: PricesmartLocationCandidate,
-  input: ScrapePriceInput
+  input: ScrapePriceInput,
+  sourceCategories: unknown[] | undefined
 ) {
   if (
     !input.unit?.trim() ||
+    !isPricesmartUnitUpdateCategory(sourceCategories) ||
     selectedCandidate.soldByWeight !== true ||
     !selectedCandidate.sourceUnit ||
     !selectedCandidate.parsedSourceUnit
@@ -422,7 +494,8 @@ export async function scrapePricesmartPrice(
     return notFound(shopId, "product_not_found", true);
   }
 
-  const attributes = result.masterData.current.allVariants[0]?.attributesRaw ?? [];
+  const currentProduct = result.masterData.current;
+  const attributes = currentProduct.allVariants[0]?.attributesRaw ?? [];
   const unitPrice = attributes.find((attr) => attr.name === "unit_price");
   if (!unitPrice) {
     return error(shopId, "unit_price_not_found", false, true);
@@ -463,10 +536,15 @@ export async function scrapePricesmartPrice(
   const unitUpdate = getProductUnitUpdate(
     locationCandidates,
     currentPrice,
-    input
+    input,
+    currentProduct.categories
+  );
+  const productUnitUpdatesAllowed = isPricesmartUnitUpdateCategory(
+    currentProduct.categories
   );
   const parsedInputUnit = parseProductUnit(input);
   const unitMismatch =
+    productUnitUpdatesAllowed &&
     currentPrice.soldByWeight === true &&
     !!input.unit?.trim() &&
     !!currentPrice.parsedSourceUnit &&
