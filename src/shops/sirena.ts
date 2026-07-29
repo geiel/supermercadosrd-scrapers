@@ -2,11 +2,6 @@ import { z } from "zod";
 import { fetchWithRetry, getSirenaHeaders } from "../http-client.js";
 import { error, notFound, ok } from "../result.js";
 import {
-  buildPurchaseTerms,
-  inferModeFromUnit,
-  normalizePurchaseUnit,
-} from "../purchase-terms.js";
-import {
   normalizeSirenaVtexProduct,
   parseSirenaVtexProductsPayload,
   withSirenaVtexSalesChannel,
@@ -16,6 +11,10 @@ import type {
   ScrapePriceInput,
   ScrapePriceResult,
 } from "../types.js";
+import {
+  extractSirenaLegacyPurchaseTerms,
+  extractSirenaVtexPurchaseTerms,
+} from "./sirena-purchase-terms.js";
 
 const shopId = 1;
 
@@ -76,7 +75,11 @@ export async function scrapeSirenaPrice(
     return ok(
       shopId,
       normalizedProduct.currentPrice,
-      normalizedProduct.regularPrice
+      normalizedProduct.regularPrice,
+      null,
+      undefined,
+      undefined,
+      extractSirenaVtexPurchaseTerms(normalizedProduct)
     );
   }
 
@@ -96,24 +99,7 @@ export async function scrapeSirenaPrice(
 
   const regularPrice = parsed.data.product.regular_price;
   const product = parsed.data.product;
-  const unit = normalizePurchaseUnit(input.baseUnit ?? input.unit);
-  const supportsDecimals =
-    product.producttype_decimal === true ||
-    product.producttype_decimal === 1 ||
-    String(product.producttype_decimal).toLowerCase() === "true";
-  const purchaseTerms = buildPurchaseTerms({
-    mode: supportsDecimals ? "measure" : inferModeFromUnit(unit),
-    unit,
-    minimum: product.minimum,
-    increment: product.producttype_step,
-    priceReferenceQuantity: 1,
-    source: "sirena_legacy_api",
-    evidence: {
-      minimum: product.minimum,
-      producttype_step: product.producttype_step,
-      producttype_decimal: product.producttype_decimal,
-    },
-  });
+  const purchaseTerms = extractSirenaLegacyPurchaseTerms(product, input);
 
   return ok(
     shopId,

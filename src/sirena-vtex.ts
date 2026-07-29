@@ -44,6 +44,11 @@ const sirenaVtexItemSchema = z
     itemId: z.union([z.string(), z.number()]),
     ean: z.union([z.string(), z.number()]).nullable().optional(),
     nameComplete: z.string().nullable().optional(),
+    measurementUnit: z.string().nullable().optional(),
+    unitMultiplier: z
+      .union([z.number(), z.string()])
+      .nullable()
+      .optional(),
     images: z.array(sirenaVtexImageSchema).optional().default([]),
     sellers: z.array(sirenaVtexSellerSchema).optional().default([]),
   })
@@ -90,6 +95,8 @@ export type NormalizedSirenaVtexProduct = {
   productReference: string | null;
   currentPrice: string | null;
   regularPrice: string | null;
+  measurementUnit: string | null;
+  unitMultiplier: number | null;
   images: string[];
   primaryImageUrl: string | null;
 };
@@ -187,18 +194,26 @@ function toPriceString(value: number | null | undefined) {
   return value.toFixed(2);
 }
 
-function getDefaultSeller(product: SirenaVtexProduct) {
+function getDefaultSellerSelection(product: SirenaVtexProduct) {
   for (const item of product.items) {
     const defaultSeller =
       item.sellers.find((seller) => seller.sellerDefault === true) ??
       item.sellers[0];
 
     if (defaultSeller?.commertialOffer) {
-      return defaultSeller;
+      return {
+        item,
+        seller: defaultSeller,
+      };
     }
   }
 
   return null;
+}
+
+function toPositiveNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function categoryPathFromCategories(categories: string[]) {
@@ -398,8 +413,8 @@ export function normalizeSirenaVtexProduct(
   );
   const apiUrl =
     buildSirenaVtexProductApi(canonicalUrl || product.linkText || "") || "";
-  const seller = getDefaultSeller(product);
-  const offer = seller?.commertialOffer;
+  const sellerSelection = getDefaultSellerSelection(product);
+  const offer = sellerSelection?.seller.commertialOffer;
   const images = extractSirenaVtexImages(product);
 
   return {
@@ -417,6 +432,9 @@ export function normalizeSirenaVtexProduct(
     currentPrice: toPriceString(offer?.Price),
     regularPrice:
       toPriceString(offer?.ListPrice) ?? toPriceString(offer?.Price) ?? null,
+    measurementUnit:
+      normalizeString(sellerSelection?.item.measurementUnit) || null,
+    unitMultiplier: toPositiveNumber(sellerSelection?.item.unitMultiplier),
     images,
     primaryImageUrl: images[0] ?? null,
   };
