@@ -46,6 +46,10 @@ export async function scrapeMercaJumboPrice(
   return ok(
     shopId,
     productLookup.product.finalPrice,
-    productLookup.product.regularPrice
+    productLookup.product.regularPrice,
+    null,
+    undefined,
+    undefined,
+    null
   );
 }

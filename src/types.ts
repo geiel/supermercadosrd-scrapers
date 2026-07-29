@@ -1,3 +1,5 @@
+import type { PurchaseTerms } from "./purchase-terms.js";
+
 export type ShopId = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 10;
 
 export type ShopName =
@@ -24,6 +26,15 @@ export type ScrapePriceInput = {
 export type FetchWithRetryConfig = {
   maxRetries?: number;
   timeoutMs?: number;
+  debugBodyLimitBytes?: number;
+  isUrlAllowed?: (url: string) => boolean;
+  onResponse?: (exchange: {
+    url: string;
+    status: number;
+    contentType: string | null;
+    body: string | null;
+    truncated: boolean;
+  }) => void | Promise<void>;
 };
 
 export type ScrapePriceSuccess = {
@@ -39,6 +50,7 @@ export type ScrapePriceSuccess = {
     baseUnit: string;
     baseUnitAmount: string;
   };
+  purchaseTerms?: PurchaseTerms | null;
 };
 
 export type ScrapePriceNotFound = {

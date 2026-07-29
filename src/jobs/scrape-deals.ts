@@ -104,6 +104,17 @@ async function main() {
       locationId: productsShopsPrices.locationId,
       currentPrice: productsShopsPrices.currentPrice,
       regularPrice: productsShopsPrices.regularPrice,
+      purchaseMode: productsShopsPrices.purchaseMode,
+      purchaseUnit: productsShopsPrices.purchaseUnit,
+      minimumPurchaseQuantity:
+        productsShopsPrices.minimumPurchaseQuantity,
+      purchaseQuantityIncrement:
+        productsShopsPrices.purchaseQuantityIncrement,
+      maximumPurchaseQuantity:
+        productsShopsPrices.maximumPurchaseQuantity,
+      priceReferenceQuantity:
+        productsShopsPrices.priceReferenceQuantity,
+      purchaseTermsSource: productsShopsPrices.purchaseTermsSource,
       updateAt: productsShopsPrices.updateAt,
       hidden: productsShopsPrices.hidden,
       unit: products.unit,

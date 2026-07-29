@@ -2,6 +2,11 @@ import { z } from "zod";
 import { fetchWithRetry, getSirenaHeaders } from "../http-client.js";
 import { error, notFound, ok } from "../result.js";
 import {
+  buildPurchaseTerms,
+  inferModeFromUnit,
+  normalizePurchaseUnit,
+} from "../purchase-terms.js";
+import {
   normalizeSirenaVtexProduct,
   parseSirenaVtexProductsPayload,
   withSirenaVtexSalesChannel,
@@ -21,6 +26,9 @@ const productSchema = z
       category: z.string(),
       price: z.string(),
       regular_price: z.string(),
+      minimum: z.unknown().optional(),
+      producttype_step: z.unknown().optional(),
+      producttype_decimal: z.unknown().optional(),
     }),
   })
   .or(
@@ -87,10 +95,33 @@ export async function scrapeSirenaPrice(
   }
 
   const regularPrice = parsed.data.product.regular_price;
+  const product = parsed.data.product;
+  const unit = normalizePurchaseUnit(input.baseUnit ?? input.unit);
+  const supportsDecimals =
+    product.producttype_decimal === true ||
+    product.producttype_decimal === 1 ||
+    String(product.producttype_decimal).toLowerCase() === "true";
+  const purchaseTerms = buildPurchaseTerms({
+    mode: supportsDecimals ? "measure" : inferModeFromUnit(unit),
+    unit,
+    minimum: product.minimum,
+    increment: product.producttype_step,
+    priceReferenceQuantity: 1,
+    source: "sirena_legacy_api",
+    evidence: {
+      minimum: product.minimum,
+      producttype_step: product.producttype_step,
+      producttype_decimal: product.producttype_decimal,
+    },
+  });
 
   return ok(
     shopId,
     currentPrice,
-    isPositivePriceString(regularPrice) ? regularPrice : currentPrice
+    isPositivePriceString(regularPrice) ? regularPrice : currentPrice,
+    null,
+    undefined,
+    undefined,
+    purchaseTerms
   );
 }

@@ -6,6 +6,11 @@ import {
 } from "../garrido-locations.js";
 import { fetchWithRetry, getGarridoHeaders } from "../http-client.js";
 import { error, notFound, ok } from "../result.js";
+import {
+  buildPurchaseTerms,
+  inferModeFromUnit,
+  normalizePurchaseUnit,
+} from "../purchase-terms.js";
 import type {
   FetchWithRetryConfig,
   ScrapePriceInput,
@@ -19,6 +24,11 @@ const query = `query GetProductsBySKU($getProductsBySKUInput: GetProductsBySKUIn
   getProductsBySKU(getProductsBySKUInput: $getProductsBySKUInput) {
     sku
     price
+    unit
+    subUnit
+    subQty
+    minQty
+    maxQty
     clickMultiplier
     isActive
     isAvailable
@@ -34,6 +44,11 @@ const query = `query GetProductsBySKU($getProductsBySKUInput: GetProductsBySKUIn
 const productSchema = z.object({
   sku: z.string(),
   price: z.number().nullable().optional(),
+  unit: z.string().nullable().optional(),
+  subUnit: z.string().nullable().optional(),
+  subQty: z.number().nullable().optional(),
+  minQty: z.number().nullable().optional(),
+  maxQty: z.number().nullable().optional(),
   clickMultiplier: z.number().nullable().optional(),
   isActive: z.boolean().nullable().optional(),
   isAvailable: z.boolean().nullable().optional(),
@@ -198,13 +213,48 @@ export async function scrapeGarridoPrice(
       const canonicalUrl = `https://www.garrido.com.do/p/${encodeURIComponent(
         product.sku || sku
       )}`;
+      const multiplier = getPriceMultiplier(product);
+      const unit = normalizePurchaseUnit(
+        product.subUnit ?? product.unit ?? input.baseUnit ?? input.unit
+      );
+      const minimum =
+        typeof product.minQty === "number" && product.minQty > 0
+          ? product.minQty
+          : multiplier;
+      const hasExactPurchaseFields = [
+        product.subQty,
+        product.minQty,
+        product.maxQty,
+        product.clickMultiplier,
+      ].some((value) => typeof value === "number" && Number.isFinite(value));
+      const purchaseTerms = hasExactPurchaseFields
+        ? buildPurchaseTerms({
+            mode: inferModeFromUnit(unit),
+            unit,
+            minimum,
+            increment: multiplier,
+            maximum: product.maxQty,
+            priceReferenceQuantity: multiplier,
+            source: "garrido_instaleap",
+            evidence: {
+              unit: product.unit,
+              subUnit: product.subUnit,
+              subQty: product.subQty,
+              minQty: product.minQty,
+              maxQty: product.maxQty,
+              clickMultiplier: product.clickMultiplier,
+            },
+          })
+        : undefined;
 
       return ok(
         shopId,
         toGarridoPriceString(currentPrice, product),
         regularPrice,
         storeReference || GARRIDO_DEFAULT_STORE_REFERENCE,
-        canonicalUrl
+        canonicalUrl,
+        undefined,
+        purchaseTerms
       );
     }
   }

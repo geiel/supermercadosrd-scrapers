@@ -20,6 +20,7 @@ import {
   jumboImageGraphqlFields,
   resolveJumboStoreCode,
 } from "./jumbo-shared.js";
+import { extractMagentoPurchaseTerms } from "./magento-purchase-terms.js";
 
 const shopId = 3;
 
@@ -205,12 +206,29 @@ export async function scrapeJumboPrice(
         ? toPriceString(regularPriceValue)
         : null;
 
+    const pageResult = await fetchWithRetryDetailed(
+      input.url,
+      { headers },
+      requestConfig
+    );
+    const pageHtml = pageResult.response
+      ? await pageResult.response.text().catch(() => "")
+      : "";
+    const purchaseTerms = pageHtml
+      ? extractMagentoPurchaseTerms(pageHtml, {
+          unit: input.baseUnit ?? input.unit,
+          source: "jumbo_product_page",
+        })
+      : undefined;
+
     return ok(
       shopId,
       finalPrice,
       regularPrice,
       null,
-      buildScrapeableJumboProductUrl(product)
+      buildScrapeableJumboProductUrl(product),
+      undefined,
+      purchaseTerms
     );
   }
 

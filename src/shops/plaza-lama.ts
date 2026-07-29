@@ -2,6 +2,11 @@ import { z } from "zod";
 import { PLAZA_LAMA_GRAPHQL_URL } from "../api-endpoints.js";
 import { fetchWithRetry, getPlazaLamaHeaders } from "../http-client.js";
 import { error, notFound, ok } from "../result.js";
+import {
+  buildPurchaseTerms,
+  inferModeFromUnit,
+  normalizePurchaseUnit,
+} from "../purchase-terms.js";
 import type {
   FetchWithRetryConfig,
   ScrapePriceInput,
@@ -14,6 +19,12 @@ const PLAZA_LAMA_SKU_PATTERN = /-([0-9]{8,14})\/?$/i;
 const query = `query GetProductsBySKU($getProductsBySKUInput: GetProductsBySKUInput!) {
   getProductsBySKU(getProductsBySKUInput: $getProductsBySKUInput) {
     price
+    unit
+    subUnit
+    subQty
+    minQty
+    maxQty
+    clickMultiplier
     isActive
     isAvailable
     promotion {
@@ -31,6 +42,12 @@ const responseSchema = z.array(
       getProductsBySKU: z.array(
         z.object({
           price: z.number(),
+          unit: z.string().nullable().optional(),
+          subUnit: z.string().nullable().optional(),
+          subQty: z.number().nullable().optional(),
+          minQty: z.number().nullable().optional(),
+          maxQty: z.number().nullable().optional(),
+          clickMultiplier: z.number().nullable().optional(),
           isActive: z.boolean().optional(),
           isAvailable: z.boolean().optional(),
           promotion: z
@@ -124,5 +141,52 @@ export async function scrapePlazaLamaPrice(
       ? first.promotion?.conditions[0]?.price
       : undefined;
   const currentPrice = promoPrice ?? first.price;
-  return ok(shopId, String(currentPrice), String(first.price));
+  const increment =
+    typeof first.clickMultiplier === "number" && first.clickMultiplier > 0
+      ? first.clickMultiplier
+      : typeof first.subQty === "number" && first.subQty > 0
+        ? first.subQty
+        : 1;
+  const minimum =
+    typeof first.minQty === "number" && first.minQty > 0
+      ? first.minQty
+      : increment;
+  const unit = normalizePurchaseUnit(
+    first.subUnit ?? first.unit ?? input.baseUnit ?? input.unit
+  );
+  const hasExactPurchaseFields = [
+    first.subQty,
+    first.minQty,
+    first.maxQty,
+    first.clickMultiplier,
+  ].some((value) => typeof value === "number" && Number.isFinite(value));
+  const purchaseTerms = hasExactPurchaseFields
+    ? buildPurchaseTerms({
+        mode: inferModeFromUnit(unit),
+        unit,
+        minimum,
+        increment,
+        maximum: first.maxQty,
+        priceReferenceQuantity: 1,
+        source: "plaza_lama_instaleap",
+        evidence: {
+          unit: first.unit,
+          subUnit: first.subUnit,
+          subQty: first.subQty,
+          minQty: first.minQty,
+          maxQty: first.maxQty,
+          clickMultiplier: first.clickMultiplier,
+        },
+      })
+    : undefined;
+
+  return ok(
+    shopId,
+    String(currentPrice),
+    String(first.price),
+    null,
+    undefined,
+    undefined,
+    purchaseTerms
+  );
 }

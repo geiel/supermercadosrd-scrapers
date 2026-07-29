@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { fetchWithRetry, getCarrefourHeaders } from "../http-client.js";
 import { error, notFound, ok } from "../result.js";
+import {
+  buildPurchaseTerms,
+  inferModeFromUnit,
+  normalizePurchaseUnit,
+} from "../purchase-terms.js";
 import type {
   FetchWithRetryConfig,
   ScrapePriceInput,
@@ -18,6 +23,7 @@ const carrefourProductSchema = z
     internalCode: z.union([z.string(), z.number()]),
     salePrice: z.unknown().optional(),
     offerPrice: z.unknown().optional(),
+    minPurchase: z.unknown().optional(),
     maxPurchase: z.unknown().optional(),
   })
   .passthrough();
@@ -207,6 +213,20 @@ export async function scrapeCarrefourPrice(
   }
 
   const canonicalSku = normalizeString(product.internalCode) || sku;
+  const unit = normalizePurchaseUnit(input.baseUnit ?? input.unit);
+  const purchaseTerms = buildPurchaseTerms({
+    mode: inferModeFromUnit(unit),
+    unit,
+    minimum: product.minPurchase,
+    increment: 1,
+    maximum: product.maxPurchase,
+    priceReferenceQuantity: 1,
+    source: "carrefour_typesense",
+    evidence: {
+      minPurchase: product.minPurchase,
+      maxPurchase: product.maxPurchase,
+    },
+  });
 
   return ok(
     shopId,
@@ -215,6 +235,8 @@ export async function scrapeCarrefourPrice(
     collectionId === CARREFOUR_DEFAULT_PLAZA_DUARTE_COLLECTION_ID
       ? CARREFOUR_PLAZA_DUARTE_LOCATION_ID
       : collectionId,
-    buildCarrefourCanonicalUrl(canonicalSku)
+    buildCarrefourCanonicalUrl(canonicalSku),
+    undefined,
+    purchaseTerms
   );
 }

@@ -7,6 +7,7 @@ import {
   type ProductShopPriceRow,
 } from "./schema.js";
 import type { ScrapePriceResult, ScrapePriceSuccess } from "../types.js";
+import type { PurchaseTerms } from "../purchase-terms.js";
 import { revalidateProduct } from "./revalidate-product.js";
 
 export type ShopPriceRow = Pick<
@@ -18,6 +19,13 @@ export type ShopPriceRow = Pick<
   | "locationId"
   | "currentPrice"
   | "regularPrice"
+  | "purchaseMode"
+  | "purchaseUnit"
+  | "minimumPurchaseQuantity"
+  | "purchaseQuantityIncrement"
+  | "maximumPurchaseQuantity"
+  | "priceReferenceQuantity"
+  | "purchaseTermsSource"
   | "updateAt"
   | "hidden"
 > & {
@@ -27,6 +35,58 @@ export type ShopPriceRow = Pick<
 };
 
 type ProductUnitUpdate = NonNullable<ScrapePriceSuccess["productUnitUpdate"]>;
+
+function purchaseTermsPatch(purchaseTerms: PurchaseTerms | null) {
+  if (purchaseTerms === null) {
+    return {
+      purchaseMode: null,
+      purchaseUnit: null,
+      minimumPurchaseQuantity: null,
+      purchaseQuantityIncrement: null,
+      maximumPurchaseQuantity: null,
+      priceReferenceQuantity: null,
+      purchaseTermsSource: null,
+      purchaseTermsEvidence: null,
+      purchaseTermsObservedAt: new Date(),
+    };
+  }
+
+  return {
+    purchaseMode: purchaseTerms.mode,
+    purchaseUnit: purchaseTerms.unit,
+    minimumPurchaseQuantity: purchaseTerms.minimum,
+    purchaseQuantityIncrement: purchaseTerms.increment,
+    maximumPurchaseQuantity: purchaseTerms.maximum,
+    priceReferenceQuantity: purchaseTerms.priceReferenceQuantity,
+    purchaseTermsSource: purchaseTerms.source,
+    purchaseTermsEvidence: purchaseTerms.evidence,
+    purchaseTermsObservedAt: new Date(),
+  };
+}
+
+function purchaseTermsChanged(
+  row: ShopPriceRow,
+  purchaseTerms: PurchaseTerms | null | undefined
+) {
+  if (purchaseTerms === undefined) {
+    return false;
+  }
+
+  const expected = purchaseTermsPatch(purchaseTerms);
+  return (
+    (row.purchaseMode ?? null) !== expected.purchaseMode ||
+    (row.purchaseUnit ?? null) !== expected.purchaseUnit ||
+    Number(row.minimumPurchaseQuantity ?? 0) !==
+      Number(expected.minimumPurchaseQuantity ?? 0) ||
+    Number(row.purchaseQuantityIncrement ?? 0) !==
+      Number(expected.purchaseQuantityIncrement ?? 0) ||
+    Number(row.maximumPurchaseQuantity ?? 0) !==
+      Number(expected.maximumPurchaseQuantity ?? 0) ||
+    Number(row.priceReferenceQuantity ?? 0) !==
+      Number(expected.priceReferenceQuantity ?? 0) ||
+    (row.purchaseTermsSource ?? null) !== expected.purchaseTermsSource
+  );
+}
 
 function logPrefix(row: ShopPriceRow) {
   return `url=${row.url} productId=${row.productId} shopId=${row.shopId}`;
@@ -42,26 +102,6 @@ async function hideProductPrice(row: ShopPriceRow) {
     .set({
       hidden: true,
       updateAt: new Date(),
-    })
-    .where(
-      and(
-        eq(productsShopsPrices.productId, row.productId),
-        eq(productsShopsPrices.shopId, row.shopId)
-      )
-    );
-
-  await revalidateProduct(row.productId);
-}
-
-async function showProductPrice(row: ShopPriceRow) {
-  if (!row.hidden) {
-    return;
-  }
-
-  await db
-    .update(productsShopsPrices)
-    .set({
-      hidden: false,
     })
     .where(
       and(
@@ -93,11 +133,16 @@ async function productHasOtherVisibleShopPrices(row: ShopPriceRow) {
   return otherShopPrice.length > 0;
 }
 
-async function touchProductPrice(row: ShopPriceRow) {
+async function touchProductPrice(
+  row: ShopPriceRow,
+  purchaseTerms: PurchaseTerms | null | undefined
+) {
   await db
     .update(productsShopsPrices)
     .set({
+      hidden: false,
       updateAt: new Date(),
+      ...(purchaseTerms === undefined ? {} : purchaseTermsPatch(purchaseTerms)),
     })
     .where(
       and(
@@ -218,9 +263,12 @@ export async function applyScrapeResult(
     updatedProductUnit = true;
   }
 
-  await showProductPrice(row);
-
   const canonicalUrl = result.canonicalUrl?.trim() || null;
+  const termsChanged = purchaseTermsChanged(row, result.purchaseTerms);
+  const termsPatch =
+    result.purchaseTerms === undefined
+      ? {}
+      : purchaseTermsPatch(result.purchaseTerms);
   const urlChanged =
     canonicalUrl !== null &&
     normalizeUrlForComparison(row.url) !== normalizeUrlForComparison(canonicalUrl);
@@ -230,33 +278,42 @@ export async function applyScrapeResult(
     Number(row.regularPrice ?? 0) === Number(result.regularPrice ?? 0) &&
     (row.locationId ?? null) === (result.locationId ?? null);
 
-  if (priceAndLocationUnchanged && !urlChanged) {
-    await touchProductPrice(row);
-    if (updatedProductUnit) {
+  if (priceAndLocationUnchanged && !urlChanged && !termsChanged) {
+    await touchProductPrice(row, result.purchaseTerms);
+    if (updatedProductUnit || row.hidden) {
       await revalidateProduct(row.productId);
     }
     console.log(`[IGNORE] ${result.shopName} ${logPrefix(row)}`);
     return;
   }
 
-  if (priceAndLocationUnchanged && urlChanged) {
+  if (priceAndLocationUnchanged && (urlChanged || termsChanged)) {
     await db
       .update(productsShopsPrices)
       .set({
-        url: canonicalUrl,
+        hidden: false,
+        ...(urlChanged ? { url: canonicalUrl } : {}),
+        ...termsPatch,
         updateAt: new Date(),
       })
       .where(
         and(
           eq(productsShopsPrices.productId, row.productId),
           eq(productsShopsPrices.shopId, row.shopId),
-          sql`${productsShopsPrices.url} IS DISTINCT FROM ${canonicalUrl}`
+          or(
+            ...(urlChanged
+              ? [sql`${productsShopsPrices.url} IS DISTINCT FROM ${canonicalUrl}`]
+              : []),
+            ...(termsChanged
+              ? [sql`TRUE`]
+              : [])
+          )
         )
       );
 
     await revalidateProduct(row.productId);
     console.log(
-      `[DONE] ${result.shopName} ${logPrefix(row)} canonicalUrl=${canonicalUrl}`
+      `[DONE] ${result.shopName} ${logPrefix(row)}${urlChanged ? ` canonicalUrl=${canonicalUrl}` : ""}${termsChanged ? " purchaseTerms=updated" : ""}`
     );
     return;
   }
@@ -265,34 +322,49 @@ export async function applyScrapeResult(
     row.currentPrice === null ||
     Number(row.currentPrice) !== Number(result.currentPrice);
 
-  const updated = await db
-    .update(productsShopsPrices)
-    .set({
-      currentPrice: result.currentPrice,
-      regularPrice: result.regularPrice,
-      locationId: result.locationId ?? null,
-      ...(urlChanged ? { url: canonicalUrl } : {}),
-      updateAt: new Date(),
-    })
-    .where(
-      and(
-        eq(productsShopsPrices.productId, row.productId),
-        eq(productsShopsPrices.shopId, row.shopId),
-        or(
-          isNull(productsShopsPrices.currentPrice),
-          ne(productsShopsPrices.currentPrice, result.currentPrice),
-          sql`${productsShopsPrices.regularPrice} IS DISTINCT FROM ${result.regularPrice}`,
-          sql`${productsShopsPrices.locationId} IS DISTINCT FROM ${result.locationId ?? null}`,
-          ...(urlChanged
-            ? [sql`${productsShopsPrices.url} IS DISTINCT FROM ${canonicalUrl}`]
-            : [])
+  const updated = await db.transaction(async (tx) => {
+    const rows = await tx
+      .update(productsShopsPrices)
+      .set({
+        currentPrice: result.currentPrice,
+        regularPrice: result.regularPrice,
+        locationId: result.locationId ?? null,
+        hidden: false,
+        ...(urlChanged ? { url: canonicalUrl } : {}),
+        ...termsPatch,
+        updateAt: new Date(),
+      })
+      .where(
+        and(
+          eq(productsShopsPrices.productId, row.productId),
+          eq(productsShopsPrices.shopId, row.shopId),
+          or(
+            isNull(productsShopsPrices.currentPrice),
+            ne(productsShopsPrices.currentPrice, result.currentPrice),
+            sql`${productsShopsPrices.regularPrice} IS DISTINCT FROM ${result.regularPrice}`,
+            sql`${productsShopsPrices.locationId} IS DISTINCT FROM ${result.locationId ?? null}`,
+            ...(urlChanged
+              ? [sql`${productsShopsPrices.url} IS DISTINCT FROM ${canonicalUrl}`]
+              : [])
+          )
         )
       )
-    )
-    .returning({
-      productId: productsShopsPrices.productId,
-      currentPrice: productsShopsPrices.currentPrice,
-    });
+      .returning({
+        productId: productsShopsPrices.productId,
+        currentPrice: productsShopsPrices.currentPrice,
+      });
+
+    if (rows.length > 0 && currentPriceChanged) {
+      await tx.insert(productsPricesHistory).values({
+        productId: row.productId,
+        shopId: row.shopId,
+        price: result.currentPrice,
+        createdAt: new Date(),
+      });
+    }
+
+    return rows;
+  });
 
   if (updated.length === 0) {
     if (updatedProductUnit) {
@@ -300,15 +372,6 @@ export async function applyScrapeResult(
     }
     console.log(`[DONE/IGNORE] ${result.shopName} ${logPrefix(row)}`);
     return;
-  }
-
-  if (currentPriceChanged) {
-    await db.insert(productsPricesHistory).values({
-      productId: row.productId,
-      shopId: row.shopId,
-      price: result.currentPrice,
-      createdAt: new Date(),
-    });
   }
 
   await revalidateProduct(row.productId);

@@ -149,6 +149,21 @@ function normalizeFetchErrorReason(rawError: unknown): FetchFailureReason {
   return "request_failed";
 }
 
+function truncateUtf8(encodedBody: Uint8Array, limit: number) {
+  let end = Math.min(encodedBody.length, limit);
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+
+  while (end > 0) {
+    try {
+      return decoder.decode(encodedBody.slice(0, end));
+    } catch {
+      end -= 1;
+    }
+  }
+
+  return "";
+}
+
 async function applyStealthSettings(page: Page): Promise<void> {
   await page.evaluateOnNewDocument(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => false });
@@ -489,10 +504,65 @@ export async function fetchWithRetryDetailed(
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      const response = await fetch(url, {
-        ...options,
-        signal: AbortSignal.timeout(timeoutMs),
-      });
+      let requestUrl = url;
+      let response: Response;
+      let redirectCount = 0;
+
+      while (true) {
+        response = await fetch(requestUrl, {
+          ...options,
+          redirect: config.isUrlAllowed ? "manual" : options.redirect,
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+
+        if (config.onResponse) {
+          try {
+            const bodyLimit = Math.max(0, config.debugBodyLimitBytes ?? 0);
+            let body: string | null = null;
+            let truncated = false;
+
+            if (bodyLimit > 0) {
+              const fullBody = await response.clone().text();
+              const encodedBody = new TextEncoder().encode(fullBody);
+              truncated = encodedBody.length > bodyLimit;
+              body = truncated
+                ? truncateUtf8(encodedBody, bodyLimit)
+                : fullBody;
+            }
+
+            await config.onResponse({
+              url: response.url || requestUrl,
+              status: response.status,
+              contentType: response.headers.get("content-type"),
+              body,
+              truncated,
+            });
+          } catch {
+            // Debug observation must never affect the production scrape result.
+          }
+        }
+
+        const location = response.headers.get("location");
+        const isRedirect =
+          response.status >= 300 && response.status < 400 && location;
+        if (!config.isUrlAllowed || !isRedirect) {
+          break;
+        }
+
+        const redirectUrl = new URL(location, requestUrl).toString();
+        if (
+          redirectCount >= 5 ||
+          !config.isUrlAllowed(redirectUrl)
+        ) {
+          return {
+            response: null,
+            failureReason: "request_aborted",
+          };
+        }
+
+        requestUrl = redirectUrl;
+        redirectCount += 1;
+      }
 
       if (response.status === 429 || response.status === 503) {
         if (attempt === attempts - 1) {

@@ -20,6 +20,8 @@ Standalone public project for Dominican supermarket scraping.
   - `products_prices_history` inserts when price changes
   - hide/show logic for unavailable products
   - optional product revalidation endpoint call
+  - normalized minimum, increment, maximum and price-reference quantities for
+    retailer purchase rules
 - Production jobs exposed through npm scripts and GitHub Actions:
   - `scrape:prices-batch` (recommended cadence: every 15 minutes)
   - `scrape:sync-nacional-catalog` (recommended cadence: every 6-12 hours)
@@ -85,6 +87,8 @@ Behavior:
   - Round 2: second URL from each shop in parallel
   - ...
 - Saves price updates directly to DB
+- Saves exact purchase terms when the retailer exposes them. Missing or
+  malformed terms never erase the last valid observation.
 
 ## Job 2: Deals (recommended every 3 hours)
 

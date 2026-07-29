@@ -7,6 +7,7 @@ import {
 } from "../http-client.js";
 import { extractNacionalSku } from "../recovery/shared.js";
 import { error, notFound, ok } from "../result.js";
+import { extractMagentoPurchaseTerms } from "./magento-purchase-terms.js";
 import type {
   FetchWithRetryConfig,
   ScrapePriceInput,
@@ -289,8 +290,26 @@ export async function scrapeNacionalPrice(
   input: ScrapePriceInput,
   requestConfig?: FetchWithRetryConfig
 ): Promise<ScrapePriceResult> {
-  return (
+  const priceResult =
     (await scrapeNacionalPriceFromRest(input.url, requestConfig)) ??
-    error(shopId, "invalid_nacional_sku", false, true)
-  );
+    error(shopId, "invalid_nacional_sku", false, true);
+
+  if (priceResult.status !== "ok") {
+    return priceResult;
+  }
+
+  const inspection = await inspectNacionalProductPage(input.url, requestConfig);
+  if (inspection.status !== "ok") {
+    return priceResult;
+  }
+
+  const purchaseTerms = extractMagentoPurchaseTerms(inspection.html, {
+    unit: input.baseUnit ?? input.unit,
+    source: "nacional_product_page",
+  });
+
+  return {
+    ...priceResult,
+    ...(purchaseTerms ? { purchaseTerms } : {}),
+  };
 }

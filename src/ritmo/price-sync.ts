@@ -30,6 +30,13 @@ type CurrentRitmoRow = {
   api: string | null;
   currentPrice: string | null;
   hidden: boolean | null;
+  purchaseMode: string | null;
+  purchaseUnit: string | null;
+  minimumPurchaseQuantity: string | null;
+  purchaseQuantityIncrement: string | null;
+  maximumPurchaseQuantity: string | null;
+  priceReferenceQuantity: string | null;
+  purchaseTermsSource: string | null;
 };
 
 export type ApplyRitmoSftpPriceSyncInput = {
@@ -152,6 +159,17 @@ export async function applyRitmoSftpPriceSync(
             api: productsShopsPrices.api,
             currentPrice: productsShopsPrices.currentPrice,
             hidden: productsShopsPrices.hidden,
+            purchaseMode: productsShopsPrices.purchaseMode,
+            purchaseUnit: productsShopsPrices.purchaseUnit,
+            minimumPurchaseQuantity:
+              productsShopsPrices.minimumPurchaseQuantity,
+            purchaseQuantityIncrement:
+              productsShopsPrices.purchaseQuantityIncrement,
+            maximumPurchaseQuantity:
+              productsShopsPrices.maximumPurchaseQuantity,
+            priceReferenceQuantity:
+              productsShopsPrices.priceReferenceQuantity,
+            purchaseTermsSource: productsShopsPrices.purchaseTermsSource,
           })
           .from(productsShopsPrices)
           .where(
@@ -181,6 +199,15 @@ export async function applyRitmoSftpPriceSync(
       const price = row.price as string;
       const priceChanged = !pricesEqual(price, current.currentPrice);
       const wasHidden = current.hidden === true;
+      const hadPurchaseTerms = [
+        current.purchaseMode,
+        current.purchaseUnit,
+        current.minimumPurchaseQuantity,
+        current.purchaseQuantityIncrement,
+        current.maximumPurchaseQuantity,
+        current.priceReferenceQuantity,
+        current.purchaseTermsSource,
+      ].some((value) => value !== null);
 
       if (priceChanged) {
         summary.changedRows += 1;
@@ -199,6 +226,15 @@ export async function applyRitmoSftpPriceSync(
             url: RITMO_SHOP_URL,
             api: canonicalSourceUrl,
             currentPrice: price,
+            purchaseMode: null,
+            purchaseUnit: null,
+            minimumPurchaseQuantity: null,
+            purchaseQuantityIncrement: null,
+            maximumPurchaseQuantity: null,
+            priceReferenceQuantity: null,
+            purchaseTermsSource: null,
+            purchaseTermsEvidence: null,
+            purchaseTermsObservedAt: now,
             updateAt: now,
             hidden: false,
           })
@@ -222,7 +258,7 @@ export async function applyRitmoSftpPriceSync(
 
       summary.updatedRows += 1;
 
-      if (priceChanged || wasHidden) {
+      if (priceChanged || wasHidden || hadPurchaseTerms) {
         affectedProductIds.add(current.productId);
       }
     }

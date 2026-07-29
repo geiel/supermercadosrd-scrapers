@@ -24,7 +24,8 @@ export function ok(
   regularPrice: string | null,
   locationId: string | null = null,
   canonicalUrl?: string | null,
-  productUnitUpdate?: ScrapePriceSuccess["productUnitUpdate"]
+  productUnitUpdate?: ScrapePriceSuccess["productUnitUpdate"],
+  purchaseTerms?: ScrapePriceSuccess["purchaseTerms"]
 ): ScrapePriceSuccess {
   return {
     status: "ok",
@@ -35,6 +36,7 @@ export function ok(
     locationId,
     canonicalUrl: canonicalUrl ?? undefined,
     productUnitUpdate,
+    ...(purchaseTerms !== undefined ? { purchaseTerms } : {}),
   };
 }
 

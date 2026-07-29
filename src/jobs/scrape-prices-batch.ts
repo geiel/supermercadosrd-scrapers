@@ -50,6 +50,20 @@ function parseNumberArg(args: Map<string, string>, key: string, fallback: number
   return parsed;
 }
 
+function parseOptionalIntegerArg(args: Map<string, string>, key: string) {
+  const raw = args.get(key);
+  if (!raw) {
+    return null;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid integer value for ${key}: ${raw}`);
+  }
+
+  return parsed;
+}
+
 async function processShopPrice(
   shopPrice: ShopPriceRow,
   timeoutMs: number,
@@ -96,33 +110,43 @@ async function main() {
   const delayMaxMs = parseNumberArg(args, "--delay-max", 1200);
   const timeoutMs = parseNumberArg(args, "--timeout", 10000);
   const maxRetries = parseNumberArg(args, "--retries", 3);
+  const targetProductId = parseOptionalIntegerArg(args, "--product-id");
+  const targetShopId = parseOptionalIntegerArg(args, "--shop-id");
+
+  if (targetShopId !== null && !isShopId(targetShopId)) {
+    throw new Error(`Unsupported shop id: ${targetShopId}`);
+  }
 
   const shopPricesFilter = and(
     or(isNull(products.deleted), eq(products.deleted, false)),
-    or(
-      and(
-        or(
-          isNull(productsShopsPrices.updateAt),
-          sql`${productsShopsPrices.updateAt} < now() - INTERVAL '18 HOURS'`
+    targetProductId !== null
+      ? eq(productsShopsPrices.productId, targetProductId)
+      : or(
+          and(
+            or(
+              isNull(productsShopsPrices.updateAt),
+              sql`${productsShopsPrices.updateAt} < now() - INTERVAL '18 HOURS'`
+            ),
+            or(
+              isNull(productsShopsPrices.hidden),
+              eq(productsShopsPrices.hidden, false)
+            )
+          ),
+          and(
+            eq(productsShopsPrices.hidden, true),
+            sql`${productsShopsPrices.updateAt} < now() - INTERVAL '3 DAYS'`
+          )
         ),
-        or(
-          isNull(productsShopsPrices.hidden),
-          eq(productsShopsPrices.hidden, false)
-        )
-      ),
-      and(
-        eq(productsShopsPrices.hidden, true),
-        sql`${productsShopsPrices.updateAt} < now() - INTERVAL '3 DAYS'`
-      )
-    )
   );
+  const selectedShopIds: readonly ShopId[] =
+    targetShopId === null ? shopIds : [targetShopId as ShopId];
 
   console.time("batch-shop-prices");
   for (let iteration = 1; iteration <= iterationCount; iteration += 1) {
     const iterationStart = Date.now();
 
     const perShopPrices = await Promise.all(
-      shopIds.map(async (shopId) => {
+      selectedShopIds.map(async (shopId) => {
         const rows = await db
           .select({
             productId: productsShopsPrices.productId,
@@ -132,6 +156,13 @@ async function main() {
             locationId: productsShopsPrices.locationId,
             currentPrice: productsShopsPrices.currentPrice,
             regularPrice: productsShopsPrices.regularPrice,
+            purchaseMode: productsShopsPrices.purchaseMode,
+            purchaseUnit: productsShopsPrices.purchaseUnit,
+            minimumPurchaseQuantity: productsShopsPrices.minimumPurchaseQuantity,
+            purchaseQuantityIncrement: productsShopsPrices.purchaseQuantityIncrement,
+            maximumPurchaseQuantity: productsShopsPrices.maximumPurchaseQuantity,
+            priceReferenceQuantity: productsShopsPrices.priceReferenceQuantity,
+            purchaseTermsSource: productsShopsPrices.purchaseTermsSource,
             updateAt: productsShopsPrices.updateAt,
             hidden: productsShopsPrices.hidden,
             unit: products.unit,
@@ -150,7 +181,7 @@ async function main() {
 
     const totalUrls = perShopPrices.reduce((sum, prices) => sum + prices.length, 0);
     console.log(
-      `[INFO] Iteration ${iteration}/${iterationCount} - ${totalUrls} URLs found across ${shopIds.length} shops`
+      `[INFO] Iteration ${iteration}/${iterationCount} - ${totalUrls} URLs found across ${selectedShopIds.length} shops`
     );
 
     for (let round = 0; round < urlsPerShop; round += 1) {

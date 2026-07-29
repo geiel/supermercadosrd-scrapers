@@ -561,6 +561,7 @@ export async function scrapePricesmartPrice(
     currentPrice.regularPrice ?? null,
     currentPrice.club ?? null,
     undefined,
-    unitUpdate
+    unitUpdate,
+    null
   );
 }
