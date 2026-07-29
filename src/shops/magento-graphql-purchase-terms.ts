@@ -2,7 +2,10 @@ import { z } from "zod";
 import {
   buildPurchaseTerms,
   normalizePurchaseUnit,
+  type PurchaseTerms,
 } from "../purchase-terms.js";
+import type { ScrapePriceInput } from "../types.js";
+import { formatUnit, parseProductUnit } from "../unit-utils.js";
 
 export const magentoPurchaseTermsGraphqlFields = `
       label_peso_variable
@@ -37,7 +40,7 @@ export const magentoPurchaseTermsGraphqlSchema = z.object({
     .optional(),
 });
 
-type MagentoGraphqlPurchaseFields = z.infer<
+export type MagentoGraphqlPurchaseFields = z.infer<
   typeof magentoPurchaseTermsGraphqlSchema
 >;
 
@@ -66,20 +69,102 @@ function getCustomAttribute(
   )?.value;
 }
 
+function hasExplicitContentAmount(unit: string | null | undefined) {
+  if (!unit?.trim()) {
+    return false;
+  }
+
+  return /^\d+(?:\.\d+)?\s+/.test(formatUnit(unit));
+}
+
+function standardTermsOrNull(
+  terms: PurchaseTerms | undefined
+): PurchaseTerms | null | undefined {
+  if (!terms) {
+    return undefined;
+  }
+
+  return terms.minimum === "1" &&
+    terms.increment === "1" &&
+    terms.maximum === null
+    ? null
+    : terms;
+}
+
 export function extractMagentoGraphqlPurchaseTerms(
   product: MagentoGraphqlPurchaseFields,
   input: {
     source: string;
+    productUnit?: Pick<
+      ScrapePriceInput,
+      "unit" | "baseUnit" | "baseUnitAmount"
+    >;
   }
 ) {
   const rawPesoVariable = getCustomAttribute(product, "peso_variable");
   const pesoVariable = parseBoolean(rawPesoVariable);
+  const evidence = {
+    label_peso_variable: product.label_peso_variable,
+    min_qty: product.min_qty,
+    qty_increments: product.qty_increments,
+    peso_variable: rawPesoVariable,
+    productUnit: input.productUnit?.unit,
+    baseUnit: input.productUnit?.baseUnit,
+    baseUnitAmount: input.productUnit?.baseUnitAmount,
+  };
 
   if (pesoVariable === false) {
-    return null;
+    return standardTermsOrNull(
+      buildPurchaseTerms({
+        mode: "unit",
+        unit: "UND",
+        minimum: product.min_qty,
+        increment: product.qty_increments,
+        maximum: null,
+        priceReferenceQuantity: 1,
+        source: input.source,
+        evidence,
+      })
+    );
   }
 
-  if (pesoVariable !== true) {
+  if (pesoVariable === null && input.productUnit) {
+    const parsedProductUnit = parseProductUnit(input.productUnit);
+    if (!parsedProductUnit) {
+      return undefined;
+    }
+
+    if (
+      parsedProductUnit.measurement === "count" ||
+      hasExplicitContentAmount(input.productUnit.unit) ||
+      parsedProductUnit.amount !== 1
+    ) {
+      return standardTermsOrNull(
+        buildPurchaseTerms({
+          mode: "unit",
+          unit: "UND",
+          minimum: product.min_qty,
+          increment: product.qty_increments,
+          maximum: null,
+          priceReferenceQuantity: 1,
+          source: input.source,
+          evidence,
+        })
+      );
+    }
+
+    const labelUnit = normalizePurchaseUnit(
+      product.label_peso_variable,
+      ""
+    );
+    if (
+      !labelUnit ||
+      labelUnit === "UND" ||
+      labelUnit !== parsedProductUnit.normalizedUnit
+    ) {
+      return undefined;
+    }
+  } else if (pesoVariable !== true) {
     return undefined;
   }
 
@@ -96,11 +181,6 @@ export function extractMagentoGraphqlPurchaseTerms(
     maximum: null,
     priceReferenceQuantity: 1,
     source: input.source,
-    evidence: {
-      label_peso_variable: product.label_peso_variable,
-      min_qty: product.min_qty,
-      qty_increments: product.qty_increments,
-      peso_variable: rawPesoVariable,
-    },
+    evidence,
   });
 }

@@ -95,3 +95,101 @@ test("preserves previous Magento rules when GraphQL is ambiguous", () => {
 
   assert.equal(terms, undefined);
 });
+
+test("uses exact normalized product metadata for ambiguous Magento weight", () => {
+  const terms = extractMagentoGraphqlPurchaseTerms(
+    {
+      label_peso_variable: "lb",
+      min_qty: 1.85,
+      qty_increments: 1.85,
+      custom_attributesV2: {
+        items: [],
+      },
+    },
+    {
+      source: "fixture_graphql",
+      productUnit: {
+        unit: "LB",
+        baseUnit: "LB",
+        baseUnitAmount: 1,
+      },
+    }
+  );
+
+  assert.equal(terms?.mode, "measure");
+  assert.equal(terms?.unit, "LB");
+  assert.equal(terms?.minimum, "1.85");
+  assert.equal(terms?.increment, "1.85");
+});
+
+test("keeps ambiguous Magento package content as a whole unit", () => {
+  const terms = extractMagentoGraphqlPurchaseTerms(
+    {
+      label_peso_variable: "lb",
+      min_qty: 1,
+      qty_increments: 1,
+      custom_attributesV2: {
+        items: [],
+      },
+    },
+    {
+      source: "fixture_graphql",
+      productUnit: {
+        unit: "8 OZ",
+        baseUnit: "OZ",
+        baseUnitAmount: 8,
+      },
+    }
+  );
+
+  assert.equal(terms, null);
+});
+
+test("preserves a non-standard unit minimum for an ambiguous Magento package", () => {
+  const terms = extractMagentoGraphqlPurchaseTerms(
+    {
+      label_peso_variable: "lb",
+      min_qty: 2,
+      qty_increments: 2,
+      custom_attributesV2: {
+        items: [],
+      },
+    },
+    {
+      source: "fixture_graphql",
+      productUnit: {
+        unit: "8 OZ",
+        baseUnit: "OZ",
+        baseUnitAmount: 8,
+      },
+    }
+  );
+
+  assert.equal(terms?.mode, "unit");
+  assert.equal(terms?.unit, "UND");
+  assert.equal(terms?.minimum, "2");
+  assert.equal(terms?.increment, "2");
+});
+
+test("preserves Magento rules when the API label conflicts with product metadata", () => {
+  const terms = extractMagentoGraphqlPurchaseTerms(
+    {
+      label_peso_variable: "lb",
+      min_qty: 1,
+      qty_increments: 1,
+      custom_attributesV2: {
+        items: [],
+      },
+    },
+    {
+      source: "fixture_graphql",
+      productUnit: {
+        unit: "KG",
+        baseUnit: "KG",
+        baseUnitAmount: 1,
+      },
+    }
+  );
+
+  assert.equal(terms, undefined);
+});

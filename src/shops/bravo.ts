@@ -1,22 +1,19 @@
 import { z } from "zod";
 import { fetchWithRetry, getBravoHeaders } from "../http-client.js";
 import { error, notFound, ok } from "../result.js";
-import {
-  buildPurchaseTerms,
-  inferModeFromUnit,
-  normalizePurchaseUnit,
-} from "../purchase-terms.js";
 import type {
   FetchWithRetryConfig,
   ScrapePriceInput,
   ScrapePriceResult,
 } from "../types.js";
+import { extractBravoPurchaseTerms } from "./bravo-purchase-terms.js";
 
 const shopId = 6;
 
 const productSchema = z
   .object({
     data: z.object({
+      idTipounidadArticulo: z.unknown().optional(),
       mincantArticuloArticulo: z.unknown().optional(),
       varcantArticuloArticulo: z.unknown().optional(),
       maxcantArticuloArticulo: z.unknown().optional(),
@@ -85,21 +82,7 @@ export async function scrapeBravoPrice(
   }
 
   const data = parsed.data.data;
-  const unit = normalizePurchaseUnit(input.baseUnit ?? input.unit);
-  const purchaseTerms = buildPurchaseTerms({
-    mode: inferModeFromUnit(unit),
-    unit,
-    minimum: data.mincantArticuloArticulo,
-    increment: data.varcantArticuloArticulo,
-    maximum: data.maxcantArticuloArticulo,
-    priceReferenceQuantity: 1,
-    source: "bravo_product_api",
-    evidence: {
-      mincantArticuloArticulo: data.mincantArticuloArticulo,
-      varcantArticuloArticulo: data.varcantArticuloArticulo,
-      maxcantArticuloArticulo: data.maxcantArticuloArticulo,
-    },
-  });
+  const purchaseTerms = extractBravoPurchaseTerms(data, input);
 
   return ok(
     shopId,

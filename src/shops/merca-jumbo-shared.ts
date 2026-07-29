@@ -2,6 +2,11 @@ import { z } from "zod";
 import { dedupeComparableUrls, normalizeNacionalImageUrl } from "../image-utils.js";
 import { fetchWithRetryDetailed } from "../http-client.js";
 import type { FetchWithRetryConfig } from "../types.js";
+import {
+  magentoPurchaseTermsGraphqlFields,
+  magentoPurchaseTermsGraphqlSchema,
+  type MagentoGraphqlPurchaseFields,
+} from "./magento-graphql-purchase-terms.js";
 
 const MERCA_JUMBO_API_URL_ENV = "MERCA_JUMBO_API_URL";
 const MERCA_JUMBO_STORE_CODE_ENV = "MERCA_JUMBO_STORE_CODE";
@@ -12,6 +17,7 @@ const mercaJumboProductQuery = `query MercaJumboProductBySku($sku: String!) {
       sku
       name
       url_key
+${magentoPurchaseTermsGraphqlFields}
       image {
         url
       }
@@ -37,36 +43,38 @@ const mercaJumboProductResponseSchema = z.object({
     products: z.object({
       items: z
         .array(
-          z.object({
-            sku: z.string(),
-            name: z.string().nullable().optional(),
-            url_key: z.string().nullable().optional(),
-            image: z
-              .object({
-                url: z.string().nullable().optional(),
-              })
-              .nullable()
-              .optional(),
-            small_image: z
-              .object({
-                url: z.string().nullable().optional(),
-              })
-              .nullable()
-              .optional(),
-            price_range: z
-              .object({
-                minimum_price: z.object({
-                  final_price: z.object({
-                    value: z.number().nullable().optional(),
+          z
+            .object({
+              sku: z.string(),
+              name: z.string().nullable().optional(),
+              url_key: z.string().nullable().optional(),
+              image: z
+                .object({
+                  url: z.string().nullable().optional(),
+                })
+                .nullable()
+                .optional(),
+              small_image: z
+                .object({
+                  url: z.string().nullable().optional(),
+                })
+                .nullable()
+                .optional(),
+              price_range: z
+                .object({
+                  minimum_price: z.object({
+                    final_price: z.object({
+                      value: z.number().nullable().optional(),
+                    }),
+                    regular_price: z.object({
+                      value: z.number().nullable().optional(),
+                    }),
                   }),
-                  regular_price: z.object({
-                    value: z.number().nullable().optional(),
-                  }),
-                }),
-              })
-              .nullable()
-              .optional(),
-          })
+                })
+                .nullable()
+                .optional(),
+            })
+            .merge(magentoPurchaseTermsGraphqlSchema)
         )
         .default([]),
     }),
@@ -80,6 +88,7 @@ type MercaJumboProduct = {
   imageUrls: string[];
   finalPrice: string | null;
   regularPrice: string | null;
+  purchaseTermsFields: MagentoGraphqlPurchaseFields;
 };
 
 export type MercaJumboProductLookupResult =
@@ -252,6 +261,7 @@ export async function fetchMercaJumboProductBySku(
       regularPrice: toPriceString(
         product.price_range?.minimum_price.regular_price.value ?? null
       ),
+      purchaseTermsFields: product,
     },
   };
 }
