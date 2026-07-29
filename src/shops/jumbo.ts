@@ -20,7 +20,11 @@ import {
   jumboImageGraphqlFields,
   resolveJumboStoreCode,
 } from "./jumbo-shared.js";
-import { extractMagentoPurchaseTerms } from "./magento-purchase-terms.js";
+import {
+  extractMagentoGraphqlPurchaseTerms,
+  magentoPurchaseTermsGraphqlFields,
+  magentoPurchaseTermsGraphqlSchema,
+} from "./magento-graphql-purchase-terms.js";
 
 const shopId = 3;
 
@@ -31,6 +35,7 @@ const jumboProductQuery = `query JumboProductBySku($sku: String!) {
       name
       url_key
 ${jumboImageGraphqlFields}
+${magentoPurchaseTermsGraphqlFields}
       price_range {
         minimum_price {
           final_price {
@@ -50,51 +55,53 @@ const jumboProductResponseSchema = z.object({
     products: z.object({
       items: z
         .array(
-          z.object({
-            sku: z.string(),
-            name: z.string().nullable().optional(),
-            url_key: z.string().nullable().optional(),
-            image: z
-              .object({
-                url: z.string().nullable().optional(),
-              })
-              .nullable()
-              .optional(),
-            small_image: z
-              .object({
-                url: z.string().nullable().optional(),
-              })
-              .nullable()
-              .optional(),
-            thumbnail: z
-              .object({
-                url: z.string().nullable().optional(),
-              })
-              .nullable()
-              .optional(),
-            media_gallery: z
-              .array(
-                z.object({
+          z
+            .object({
+              sku: z.string(),
+              name: z.string().nullable().optional(),
+              url_key: z.string().nullable().optional(),
+              image: z
+                .object({
                   url: z.string().nullable().optional(),
-                  disabled: z.boolean().nullable().optional(),
                 })
-              )
-              .nullable()
-              .optional(),
-            price_range: z
-              .object({
-                minimum_price: z.object({
-                  final_price: z.object({
-                    value: z.number().nullable().optional(),
+                .nullable()
+                .optional(),
+              small_image: z
+                .object({
+                  url: z.string().nullable().optional(),
+                })
+                .nullable()
+                .optional(),
+              thumbnail: z
+                .object({
+                  url: z.string().nullable().optional(),
+                })
+                .nullable()
+                .optional(),
+              media_gallery: z
+                .array(
+                  z.object({
+                    url: z.string().nullable().optional(),
+                    disabled: z.boolean().nullable().optional(),
+                  })
+                )
+                .nullable()
+                .optional(),
+              price_range: z
+                .object({
+                  minimum_price: z.object({
+                    final_price: z.object({
+                      value: z.number().nullable().optional(),
+                    }),
+                    regular_price: z.object({
+                      value: z.number().nullable().optional(),
+                    }),
                   }),
-                  regular_price: z.object({
-                    value: z.number().nullable().optional(),
-                  }),
-                }),
-              })
-              .nullable()
-              .optional(),
-          })
+                })
+                .nullable()
+                .optional(),
+            })
+            .merge(magentoPurchaseTermsGraphqlSchema)
         )
         .default([]),
     }),
@@ -206,20 +213,9 @@ export async function scrapeJumboPrice(
         ? toPriceString(regularPriceValue)
         : null;
 
-    const pageResult = await fetchWithRetryDetailed(
-      input.url,
-      { headers },
-      requestConfig
-    );
-    const pageHtml = pageResult.response
-      ? await pageResult.response.text().catch(() => "")
-      : "";
-    const purchaseTerms = pageHtml
-      ? extractMagentoPurchaseTerms(pageHtml, {
-          unit: input.baseUnit ?? input.unit,
-          source: "jumbo_product_page",
-        })
-      : undefined;
+    const purchaseTerms = extractMagentoGraphqlPurchaseTerms(product, {
+      source: "jumbo_graphql",
+    });
 
     return ok(
       shopId,
