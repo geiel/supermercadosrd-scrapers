@@ -79,6 +79,22 @@ function getPlazaLamaSku(input: ScrapePriceInput): string | null {
   return input.api?.trim() || extractPlazaLamaSku(input.url);
 }
 
+export function resolvePlazaLamaPurchaseUnit(input: {
+  subUnit?: string | null;
+  unit?: string | null;
+  baseUnit?: string | null;
+  productUnit?: string | null;
+}) {
+  const rawUnit = [
+    input.subUnit,
+    input.unit,
+    input.baseUnit,
+    input.productUnit,
+  ].find((value) => typeof value === "string" && value.trim().length > 0);
+
+  return normalizePurchaseUnit(rawUnit);
+}
+
 export async function scrapePlazaLamaPrice(
   input: ScrapePriceInput,
   requestConfig?: FetchWithRetryConfig
@@ -151,9 +167,12 @@ export async function scrapePlazaLamaPrice(
     typeof first.minQty === "number" && first.minQty > 0
       ? first.minQty
       : increment;
-  const unit = normalizePurchaseUnit(
-    first.subUnit ?? first.unit ?? input.baseUnit ?? input.unit
-  );
+  const unit = resolvePlazaLamaPurchaseUnit({
+    subUnit: first.subUnit,
+    unit: first.unit,
+    baseUnit: input.baseUnit,
+    productUnit: input.unit,
+  });
   const hasExactPurchaseFields = [
     first.subQty,
     first.minQty,

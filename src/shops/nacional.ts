@@ -263,6 +263,7 @@ export async function scrapeNacionalPrice(
       : null;
   const purchaseTerms = extractMagentoGraphqlPurchaseTerms(product, {
     source: "nacional_graphql",
+    productUnit: input,
   });
 
   return ok(
