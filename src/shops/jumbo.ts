@@ -215,6 +215,7 @@ export async function scrapeJumboPrice(
 
     const purchaseTerms = extractMagentoGraphqlPurchaseTerms(product, {
       source: "jumbo_graphql",
+      productUnit: input,
     });
 
     return ok(
