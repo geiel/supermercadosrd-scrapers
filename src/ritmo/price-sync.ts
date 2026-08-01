@@ -1,7 +1,8 @@
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
+import { recordProductPriceStateInTransaction } from "../db/product-price-history.js";
 import { revalidateProduct } from "../db/revalidate-product.js";
-import { productsPricesHistory, productsShopsPrices } from "../db/schema.js";
+import { productsShopsPrices } from "../db/schema.js";
 import { isPositivePrice, type RitmoPriceCsvRow } from "./price-csv.js";
 
 const DEFAULT_RITMO_SHOP_ID = 9;
@@ -246,13 +247,16 @@ export async function applyRitmoSftpPriceSync(
           );
 
         if (priceChanged) {
-          await tx.insert(productsPricesHistory).values({
+          const historyInserted = await recordProductPriceStateInTransaction(tx, {
             productId: current.productId,
             shopId,
             price,
+            regularPrice: null,
             createdAt: now,
           });
-          summary.historyRowsInserted += 1;
+          if (historyInserted) {
+            summary.historyRowsInserted += 1;
+          }
         }
       }
 

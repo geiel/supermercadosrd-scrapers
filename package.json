@@ -35,6 +35,7 @@
     "scrape:broken-images-batch": "tsx src/jobs/fix-broken-images-batch.ts",
     "scrape:revert-bravo-second-images": "tsx src/jobs/revert-bravo-second-image-fixes.ts",
     "scrape:deals": "tsx src/jobs/scrape-deals.ts",
+    "test": "tsx --test src/*.test.ts src/db/*.test.ts src/shops/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

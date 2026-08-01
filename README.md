@@ -17,7 +17,7 @@ Standalone public project for Dominican supermarket scraping.
 - Drizzle + Postgres DB integration
 - DB update behavior aligned with `supermercados-rd` jobs:
   - `products_shops_prices` read/update
-  - `products_prices_history` inserts when price changes
+  - `products_prices_history` inserts when the selling or regular price changes
   - hide/show logic for unavailable products
   - optional product revalidation endpoint call
   - normalized minimum, increment, maximum and price-reference quantities for
@@ -259,8 +259,9 @@ Behavior:
 - Parses `SKU`, `Descripcion`, `Codigo de Barras`, `Precio`, and `Marca`.
 - Matches existing Ritmo rows by `products_shops_prices.api =
   ritmo://sku/<SKU>`.
-- Updates current prices and inserts `products_prices_history` only when the
-  price changed.
+- Updates current prices and inserts a complete `products_prices_history`
+  snapshot when the selling or regular price changes. Ritmo currently reports
+  no separate regular price, so its snapshots store `regularPrice = NULL`.
 - Unhides matched SKUs with a positive price.
 - Hides existing Ritmo rows whose SKU is missing from the CSV or whose CSV
   price is `0`/invalid.
