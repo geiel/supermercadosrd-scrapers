@@ -2,10 +2,13 @@ import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "./client.js";
 import {
   products,
-  productsPricesHistory,
   productsShopsPrices,
   type ProductShopPriceRow,
 } from "./schema.js";
+import {
+  productPriceStatesEqual,
+  recordProductPriceStateInTransaction,
+} from "./product-price-history.js";
 import type { ScrapePriceResult, ScrapePriceSuccess } from "../types.js";
 import type { PurchaseTerms } from "../purchase-terms.js";
 import { revalidateProduct } from "./revalidate-product.js";
@@ -274,8 +277,10 @@ export async function applyScrapeResult(
     normalizeUrlForComparison(row.url) !== normalizeUrlForComparison(canonicalUrl);
   const priceAndLocationUnchanged =
     row.currentPrice !== null &&
-    Number(row.currentPrice) === Number(result.currentPrice) &&
-    Number(row.regularPrice ?? 0) === Number(result.regularPrice ?? 0) &&
+    productPriceStatesEqual(
+      { price: row.currentPrice, regularPrice: row.regularPrice },
+      { price: result.currentPrice, regularPrice: result.regularPrice }
+    ) &&
     (row.locationId ?? null) === (result.locationId ?? null);
 
   if (priceAndLocationUnchanged && !urlChanged && !termsChanged) {
@@ -318,9 +323,11 @@ export async function applyScrapeResult(
     return;
   }
 
-  const currentPriceChanged =
-    row.currentPrice === null ||
-    Number(row.currentPrice) !== Number(result.currentPrice);
+  const priceStateChanged = !productPriceStatesEqual(
+    { price: row.currentPrice, regularPrice: row.regularPrice },
+    { price: result.currentPrice, regularPrice: result.regularPrice }
+  );
+  const observedAt = new Date();
 
   const updated = await db.transaction(async (tx) => {
     const rows = await tx
@@ -332,7 +339,7 @@ export async function applyScrapeResult(
         hidden: false,
         ...(urlChanged ? { url: canonicalUrl } : {}),
         ...termsPatch,
-        updateAt: new Date(),
+        updateAt: observedAt,
       })
       .where(
         and(
@@ -354,12 +361,13 @@ export async function applyScrapeResult(
         currentPrice: productsShopsPrices.currentPrice,
       });
 
-    if (rows.length > 0 && currentPriceChanged) {
-      await tx.insert(productsPricesHistory).values({
+    if (rows.length > 0 && priceStateChanged) {
+      await recordProductPriceStateInTransaction(tx, {
         productId: row.productId,
         shopId: row.shopId,
         price: result.currentPrice,
-        createdAt: new Date(),
+        regularPrice: result.regularPrice,
+        createdAt: observedAt,
       });
     }
 

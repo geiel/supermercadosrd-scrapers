@@ -1,8 +1,10 @@
 import {
   boolean,
+  index,
   integer,
   jsonb,
   numeric,
+  pgEnum,
   pgTable,
   primaryKey,
   text,
@@ -96,13 +98,33 @@ export const productsShopsPrices = pgTable(
   ]
 );
 
-export const productsPricesHistory = pgTable("products_prices_history", {
-  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
-  productId: integer("productId").notNull(),
-  shopId: integer("shopId").notNull(),
-  price: numeric("price").notNull(),
-  createdAt: timestamp("createdAt", { withTimezone: true }).notNull(),
-});
+export const productPriceHistoryCaptureTypeEnum = pgEnum(
+  "product_price_history_capture_type",
+  ["legacy_price_only", "initial_snapshot", "state_change"]
+);
+
+export const productsPricesHistory = pgTable(
+  "products_prices_history",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    productId: integer("productId").notNull(),
+    shopId: integer("shopId").notNull(),
+    price: numeric("price").notNull(),
+    regularPrice: numeric("regularPrice"),
+    captureType: productPriceHistoryCaptureTypeEnum("captureType")
+      .notNull()
+      .default("legacy_price_only"),
+    createdAt: timestamp("createdAt", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    index("products_prices_history_product_shop_created_id_idx").on(
+      table.productId,
+      table.shopId,
+      table.createdAt,
+      table.id
+    ),
+  ]
+);
 
 export const todaysDeals = pgTable("todays_deals", {
   productId: integer("productId").primaryKey(),
