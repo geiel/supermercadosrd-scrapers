@@ -31,6 +31,10 @@ function positiveDecimal(value: unknown) {
   return (Math.round(parsed * 1000) / 1000).toString();
 }
 
+function isWholeDecimal(value: string) {
+  return Number.isInteger(Number(value));
+}
+
 export function normalizePurchaseUnit(value: unknown, fallback = "UND") {
   const normalized = String(value ?? "")
     .trim()
@@ -40,7 +44,9 @@ export function normalizePurchaseUnit(value: unknown, fallback = "UND") {
     .replace("KILOGRAMOS", "KG")
     .replace("KILOGRAMO", "KG")
     .replace("UNIDADES", "UND")
-    .replace("UNIDAD", "UND");
+    .replace("UNIDAD", "UND")
+    .replace(/^UN\.?$/, "UND")
+    .replace(/^UNIT$/, "UND");
 
   if (["LB", "KG", "UND", "GR", "OZ", "L", "ML"].includes(normalized)) {
     return normalized;
@@ -60,11 +66,22 @@ export function buildPurchaseTerms(
       : positiveDecimal(input.maximum);
   const priceReferenceQuantity =
     positiveDecimal(input.priceReferenceQuantity ?? 1);
+  const unit = normalizePurchaseUnit(input.unit);
+  const modeUnitMismatch =
+    (input.mode === "unit" && unit !== "UND") ||
+    (input.mode === "measure" && unit === "UND");
+  const fractionalWholeUnitQuantity =
+    input.mode === "unit" &&
+    minimum !== null &&
+    increment !== null &&
+    (!isWholeDecimal(minimum) || !isWholeDecimal(increment));
 
   if (
     !minimum ||
     !increment ||
     !priceReferenceQuantity ||
+    modeUnitMismatch ||
+    fractionalWholeUnitQuantity ||
     (maximum !== null && Number(maximum) < Number(minimum))
   ) {
     const observedFields = Object.entries(input.evidence)
@@ -80,7 +97,7 @@ export function buildPurchaseTerms(
 
   return {
     mode: input.mode,
-    unit: normalizePurchaseUnit(input.unit),
+    unit,
     minimum,
     increment,
     maximum,

@@ -77,6 +77,13 @@ function hasExplicitContentAmount(unit: string | null | undefined) {
   return /^\d+(?:\.\d+)?\s+/.test(formatUnit(unit));
 }
 
+function hasFractionalPurchaseQuantity(product: MagentoGraphqlPurchaseFields) {
+  return [product.min_qty, product.qty_increments].some((value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 && !Number.isInteger(parsed);
+  });
+}
+
 function standardTermsOrNull(
   terms: PurchaseTerms | undefined
 ): PurchaseTerms | null | undefined {
@@ -112,8 +119,12 @@ export function extractMagentoGraphqlPurchaseTerms(
     baseUnit: input.productUnit?.baseUnit,
     baseUnitAmount: input.productUnit?.baseUnitAmount,
   };
+  const hasFractionalQuantity = hasFractionalPurchaseQuantity(product);
 
   if (pesoVariable === false) {
+    if (hasFractionalQuantity) {
+      return undefined;
+    }
     return standardTermsOrNull(
       buildPurchaseTerms({
         mode: "unit",
@@ -134,7 +145,21 @@ export function extractMagentoGraphqlPurchaseTerms(
       return undefined;
     }
 
-    if (
+    const labelUnit = normalizePurchaseUnit(product.label_peso_variable, "");
+    const labelMatchesProduct =
+      Boolean(labelUnit) &&
+      labelUnit !== "UND" &&
+      labelUnit === parsedProductUnit.normalizedUnit;
+
+    if (hasFractionalQuantity) {
+      if (
+        parsedProductUnit.measurement === "count" ||
+        parsedProductUnit.amount !== 1 ||
+        !labelMatchesProduct
+      ) {
+        return undefined;
+      }
+    } else if (
       parsedProductUnit.measurement === "count" ||
       hasExplicitContentAmount(input.productUnit.unit) ||
       parsedProductUnit.amount !== 1
@@ -153,10 +178,6 @@ export function extractMagentoGraphqlPurchaseTerms(
       );
     }
 
-    const labelUnit = normalizePurchaseUnit(
-      product.label_peso_variable,
-      ""
-    );
     if (
       !labelUnit ||
       labelUnit === "UND" ||
@@ -171,6 +192,18 @@ export function extractMagentoGraphqlPurchaseTerms(
   const unit = normalizePurchaseUnit(product.label_peso_variable, "");
   if (!unit || unit === "UND") {
     return undefined;
+  }
+
+  if (pesoVariable === true && input.productUnit) {
+    const parsedProductUnit = parseProductUnit(input.productUnit);
+    if (
+      parsedProductUnit &&
+      (parsedProductUnit.measurement === "count" ||
+        parsedProductUnit.normalizedUnit !== unit ||
+        parsedProductUnit.amount !== 1)
+    ) {
+      return null;
+    }
   }
 
   return buildPurchaseTerms({

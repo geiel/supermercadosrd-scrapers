@@ -3,9 +3,9 @@ import { fetchWithRetry, getCarrefourHeaders } from "../http-client.js";
 import { error, notFound, ok } from "../result.js";
 import {
   buildPurchaseTerms,
-  inferModeFromUnit,
   normalizePurchaseUnit,
 } from "../purchase-terms.js";
+import { formatUnit, parseProductUnit } from "../unit-utils.js";
 import type {
   FetchWithRetryConfig,
   ScrapePriceInput,
@@ -25,6 +25,7 @@ const carrefourProductSchema = z
     offerPrice: z.unknown().optional(),
     minPurchase: z.unknown().optional(),
     maxPurchase: z.unknown().optional(),
+    itemName: z.string().nullable().optional(),
   })
   .passthrough();
 
@@ -42,6 +43,54 @@ const carrefourSearchResponseSchema = z
   .passthrough();
 
 type CarrefourProduct = z.infer<typeof carrefourProductSchema>;
+
+function hasExplicitContentAmount(unit: string | null | undefined) {
+  return Boolean(unit?.trim() && /^\d+(?:\.\d+)?\s+/.test(formatUnit(unit)));
+}
+
+export function extractCarrefourPurchaseTerms(
+  product: Pick<CarrefourProduct, "minPurchase" | "maxPurchase" | "itemName">,
+  input: Pick<ScrapePriceInput, "unit" | "baseUnit" | "baseUnitAmount">
+) {
+  const parsedProductUnit = parseProductUnit(input);
+  const explicitPackage = hasExplicitContentAmount(input.unit);
+  const normalizedMeasureUnit = parsedProductUnit
+    ? normalizePurchaseUnit(parsedProductUnit.normalizedUnit, "")
+    : "";
+  const isMeasuredProduct = Boolean(
+    parsedProductUnit &&
+      parsedProductUnit.measurement !== "count" &&
+      parsedProductUnit.amount === 1 &&
+      !explicitPackage &&
+      normalizedMeasureUnit &&
+      normalizedMeasureUnit !== "UND"
+  );
+
+  if (!parsedProductUnit) {
+    return undefined;
+  }
+
+  return buildPurchaseTerms({
+    mode: isMeasuredProduct ? "measure" : "unit",
+    unit: isMeasuredProduct ? normalizedMeasureUnit : "UND",
+    minimum: product.minPurchase,
+    increment: 1,
+    maximum: product.maxPurchase,
+    priceReferenceQuantity: 1,
+    source: "carrefour_typesense",
+    evidence: {
+      minPurchase: product.minPurchase,
+      maxPurchase: product.maxPurchase,
+      itemName: product.itemName,
+      productUnit: input.unit,
+      baseUnit: input.baseUnit,
+      baseUnitAmount: input.baseUnitAmount,
+      inference: isMeasuredProduct
+        ? "bare_product_measure_unit"
+        : "whole_package_or_count",
+    },
+  });
+}
 
 function normalizeString(value: unknown) {
   return String(value ?? "").trim();
@@ -213,20 +262,7 @@ export async function scrapeCarrefourPrice(
   }
 
   const canonicalSku = normalizeString(product.internalCode) || sku;
-  const unit = normalizePurchaseUnit(input.baseUnit ?? input.unit);
-  const purchaseTerms = buildPurchaseTerms({
-    mode: inferModeFromUnit(unit),
-    unit,
-    minimum: product.minPurchase,
-    increment: 1,
-    maximum: product.maxPurchase,
-    priceReferenceQuantity: 1,
-    source: "carrefour_typesense",
-    evidence: {
-      minPurchase: product.minPurchase,
-      maxPurchase: product.maxPurchase,
-    },
-  });
+  const purchaseTerms = extractCarrefourPurchaseTerms(product, input);
 
   return ok(
     shopId,

@@ -97,6 +97,7 @@ export type NormalizedSirenaVtexProduct = {
   regularPrice: string | null;
   measurementUnit: string | null;
   unitMultiplier: number | null;
+  itemNameComplete: string | null;
   images: string[];
   primaryImageUrl: string | null;
 };
@@ -435,6 +436,8 @@ export function normalizeSirenaVtexProduct(
     measurementUnit:
       normalizeString(sellerSelection?.item.measurementUnit) || null,
     unitMultiplier: toPositiveNumber(sellerSelection?.item.unitMultiplier),
+    itemNameComplete:
+      normalizeString(sellerSelection?.item.nameComplete) || null,
     images,
     primaryImageUrl: images[0] ?? null,
   };

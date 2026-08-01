@@ -125,7 +125,7 @@ export function extractSirenaLegacyPurchaseTerms(
 
 function normalizeVtexPurchaseUnit(value: string | null) {
   const normalized = value?.trim().toUpperCase() ?? "";
-  if (["UN", "UN.", "UND", "UNIT", "UNIDAD"].includes(normalized)) {
+  if (["UN", "UN.", "UND", "UND.", "UNIT", "UNIDAD"].includes(normalized)) {
     return "UND";
   }
   if (normalized === "G") {
@@ -135,31 +135,85 @@ function normalizeVtexPurchaseUnit(value: string | null) {
   return normalizePurchaseUnit(normalized, "");
 }
 
+function getDeclaredItemQuantity(value: string | null) {
+  const match = value
+    ?.trim()
+    .match(/(\d+(?:[.,]\d+)?)\s*(LB|KG|G|GR|OZ|ML|L|UN\.?|UND\.?|UNIDAD(?:ES)?)\s*$/i);
+  if (!match) {
+    return null;
+  }
+
+  const amount = Number(match[1].replace(",", "."));
+  const unit = normalizeVtexPurchaseUnit(match[2]);
+  return Number.isFinite(amount) && amount > 0 && unit
+    ? { amount, unit }
+    : null;
+}
+
 export function extractSirenaVtexPurchaseTerms(
   product: Pick<
     NormalizedSirenaVtexProduct,
     "measurementUnit" | "unitMultiplier"
-  >
+  > &
+    Partial<Pick<NormalizedSirenaVtexProduct, "itemNameComplete">>,
+  input?: Pick<ScrapePriceInput, "unit" | "baseUnit" | "baseUnitAmount">
 ) {
   const unit = normalizeVtexPurchaseUnit(product.measurementUnit);
   if (!unit) {
     return undefined;
   }
 
-  const evidence = {
+  const evidence: Record<string, unknown> = {
     measurementUnit: product.measurementUnit,
     unitMultiplier: product.unitMultiplier,
+    itemNameComplete: product.itemNameComplete,
+    productUnit: input?.unit,
+    baseUnit: input?.baseUnit,
+    baseUnitAmount: input?.baseUnitAmount,
   };
 
   if (unit === "UND") {
     return null;
   }
 
+  const declaredItemQuantity = getDeclaredItemQuantity(
+    product.itemNameComplete ?? null
+  );
+  if (declaredItemQuantity?.unit === "UND") {
+    return null;
+  }
+
+  const parsedProductUnit = input ? parseProductUnit(input) : null;
+  if (
+    parsedProductUnit &&
+    (parsedProductUnit.measurement === "count" ||
+      parsedProductUnit.normalizedUnit !== unit ||
+      parsedProductUnit.amount !== 1)
+  ) {
+    return undefined;
+  }
+
+  let effectiveMultiplier = product.unitMultiplier;
+  if (
+    typeof effectiveMultiplier === "number" &&
+    effectiveMultiplier > 20
+  ) {
+    if (
+      declaredItemQuantity?.unit !== unit ||
+      declaredItemQuantity.amount > 20
+    ) {
+      return undefined;
+    }
+    effectiveMultiplier = declaredItemQuantity.amount;
+    evidence.correctedUnitMultiplier = effectiveMultiplier;
+    evidence.correctionReason = "extreme_multiplier_conflicts_with_item_label";
+  }
+
   return buildPurchaseTerms({
     mode: "measure",
     unit,
-    minimum: product.unitMultiplier,
-    increment: product.unitMultiplier,
+    minimum: effectiveMultiplier,
+    increment: effectiveMultiplier,
     maximum: null,
     priceReferenceQuantity: 1,
     source: "sirena_vtex_api",

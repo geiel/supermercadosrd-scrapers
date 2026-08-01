@@ -44,6 +44,20 @@ test("rejects incoherent exact terms", () => {
   );
 });
 
+test("rejects fractional quantities for whole-unit purchases", () => {
+  assert.equal(
+    buildPurchaseTerms({
+      mode: "unit",
+      unit: "UND",
+      minimum: 0.5,
+      increment: 0.5,
+      source: "fixture",
+      evidence: { minimum: 0.5 },
+    }),
+    undefined
+  );
+});
+
 test("extracts exact Magento purchase terms from GraphQL", () => {
   const terms = extractMagentoGraphqlPurchaseTerms(
     {
@@ -122,6 +136,51 @@ test("uses exact normalized product metadata for ambiguous Magento weight", () =
   assert.equal(terms?.increment, "1.85");
 });
 
+test("uses fractional Magento quantities as measured sale for a matching 1 LB product", () => {
+  const terms = extractMagentoGraphqlPurchaseTerms(
+    {
+      label_peso_variable: "lb",
+      min_qty: 0.5,
+      qty_increments: 0.5,
+      custom_attributesV2: null,
+    },
+    {
+      source: "fixture_graphql",
+      productUnit: {
+        unit: "1 LB",
+        baseUnit: "LB",
+        baseUnitAmount: 1,
+      },
+    }
+  );
+
+  assert.equal(terms?.mode, "measure");
+  assert.equal(terms?.unit, "LB");
+  assert.equal(terms?.minimum, "0.5");
+  assert.equal(terms?.increment, "0.5");
+});
+
+test("does not turn a fixed package into fractional whole units", () => {
+  const terms = extractMagentoGraphqlPurchaseTerms(
+    {
+      label_peso_variable: "lb",
+      min_qty: 0.5,
+      qty_increments: 0.5,
+      custom_attributesV2: null,
+    },
+    {
+      source: "fixture_graphql",
+      productUnit: {
+        unit: "8 OZ",
+        baseUnit: "OZ",
+        baseUnitAmount: 8,
+      },
+    }
+  );
+
+  assert.equal(terms, undefined);
+});
+
 test("keeps ambiguous Magento package content as a whole unit", () => {
   const terms = extractMagentoGraphqlPurchaseTerms(
     {
@@ -192,4 +251,27 @@ test("preserves Magento rules when the API label conflicts with product metadata
   );
 
   assert.equal(terms, undefined);
+});
+
+test("clears explicit Magento measure rules that conflict with a fixed package", () => {
+  const terms = extractMagentoGraphqlPurchaseTerms(
+    {
+      label_peso_variable: "lb",
+      min_qty: 1,
+      qty_increments: 1,
+      custom_attributesV2: {
+        items: [{ code: "peso_variable", value: "1" }],
+      },
+    },
+    {
+      source: "fixture_graphql",
+      productUnit: {
+        unit: "8 KG",
+        baseUnit: "KG",
+        baseUnitAmount: 8,
+      },
+    }
+  );
+
+  assert.equal(terms, null);
 });

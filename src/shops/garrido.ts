@@ -10,7 +10,9 @@ import {
   buildPurchaseTerms,
   inferModeFromUnit,
   normalizePurchaseUnit,
+  type PurchaseTerms,
 } from "../purchase-terms.js";
+import { parseProductUnit } from "../unit-utils.js";
 import type {
   FetchWithRetryConfig,
   ScrapePriceInput,
@@ -77,6 +79,51 @@ const responseSchema = z.array(
 );
 
 type GarridoProduct = z.infer<typeof productSchema>;
+type GarridoPurchaseFields = Pick<
+  GarridoProduct,
+  | "unit"
+  | "subUnit"
+  | "subQty"
+  | "minQty"
+  | "maxQty"
+  | "clickMultiplier"
+>;
+
+function firstNonEmptyString(...values: Array<string | null | undefined>) {
+  return values.find((value) => value?.trim())?.trim() ?? null;
+}
+
+export function resolveGarridoPurchaseUnit(input: {
+  subUnit?: string | null;
+  unit?: string | null;
+  productUnit?: string | null;
+  baseUnit?: string | null;
+  baseUnitAmount?: string | number | null;
+}) {
+  const sourceUnit = normalizePurchaseUnit(
+    firstNonEmptyString(input.subUnit, input.unit),
+    ""
+  );
+  if (!sourceUnit || sourceUnit === "UND") {
+    return "UND";
+  }
+
+  const parsedProductUnit = parseProductUnit({
+    unit: input.productUnit,
+    baseUnit: input.baseUnit,
+    baseUnitAmount: input.baseUnitAmount,
+  });
+  if (
+    parsedProductUnit &&
+    (parsedProductUnit.measurement === "count" ||
+      parsedProductUnit.normalizedUnit !== sourceUnit ||
+      parsedProductUnit.amount !== 1)
+  ) {
+    return "UND";
+  }
+
+  return sourceUnit;
+}
 
 function extractGarridoSkuFromUrl(url: string) {
   try {
@@ -155,7 +202,7 @@ function getActivePrice(product: GarridoProduct) {
   return typeof promotionPrice === "number" ? promotionPrice : product.price;
 }
 
-function getPriceMultiplier(product: GarridoProduct) {
+function getPriceMultiplier(product: Pick<GarridoProduct, "clickMultiplier">) {
   const clickMultiplier = product.clickMultiplier;
 
   if (
@@ -167,6 +214,77 @@ function getPriceMultiplier(product: GarridoProduct) {
   }
 
   return clickMultiplier;
+}
+
+function getPurchaseIncrement(product: GarridoPurchaseFields) {
+  for (const value of [product.clickMultiplier, product.subQty]) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+  }
+
+  return 1;
+}
+
+function isWholePositive(value: number) {
+  return Number.isFinite(value) && value > 0 && Number.isInteger(value);
+}
+
+export function extractGarridoPurchaseTerms(
+  product: GarridoPurchaseFields,
+  input: Pick<ScrapePriceInput, "unit" | "baseUnit" | "baseUnitAmount">
+): PurchaseTerms | null | undefined {
+  const hasExactPurchaseFields = [
+    product.subQty,
+    product.minQty,
+    product.maxQty,
+    product.clickMultiplier,
+  ].some((value) => typeof value === "number" && Number.isFinite(value));
+  if (!hasExactPurchaseFields) {
+    return undefined;
+  }
+
+  const increment = getPurchaseIncrement(product);
+  const minimum =
+    typeof product.minQty === "number" && product.minQty > 0
+      ? product.minQty
+      : increment;
+  const unit = resolveGarridoPurchaseUnit({
+    subUnit: product.subUnit,
+    unit: product.unit,
+    productUnit: input.unit,
+    baseUnit: input.baseUnit,
+    baseUnitAmount: input.baseUnitAmount,
+  });
+
+  if (
+    unit === "UND" &&
+    (!isWholePositive(minimum) || !isWholePositive(increment))
+  ) {
+    return null;
+  }
+
+  return buildPurchaseTerms({
+    mode: inferModeFromUnit(unit),
+    unit,
+    minimum,
+    increment,
+    maximum: product.maxQty,
+    priceReferenceQuantity: getPriceMultiplier(product),
+    source: "garrido_instaleap",
+    evidence: {
+      unit: product.unit,
+      subUnit: product.subUnit,
+      subQty: product.subQty,
+      minQty: product.minQty,
+      maxQty: product.maxQty,
+      clickMultiplier: product.clickMultiplier,
+      productUnit: input.unit,
+      baseUnit: input.baseUnit,
+      baseUnitAmount: input.baseUnitAmount,
+      resolvedUnit: unit,
+    },
+  });
 }
 
 function toGarridoPriceString(price: number, product: GarridoProduct) {
@@ -213,39 +331,7 @@ export async function scrapeGarridoPrice(
       const canonicalUrl = `https://www.garrido.com.do/p/${encodeURIComponent(
         product.sku || sku
       )}`;
-      const multiplier = getPriceMultiplier(product);
-      const unit = normalizePurchaseUnit(
-        product.subUnit ?? product.unit ?? input.baseUnit ?? input.unit
-      );
-      const minimum =
-        typeof product.minQty === "number" && product.minQty > 0
-          ? product.minQty
-          : multiplier;
-      const hasExactPurchaseFields = [
-        product.subQty,
-        product.minQty,
-        product.maxQty,
-        product.clickMultiplier,
-      ].some((value) => typeof value === "number" && Number.isFinite(value));
-      const purchaseTerms = hasExactPurchaseFields
-        ? buildPurchaseTerms({
-            mode: inferModeFromUnit(unit),
-            unit,
-            minimum,
-            increment: multiplier,
-            maximum: product.maxQty,
-            priceReferenceQuantity: multiplier,
-            source: "garrido_instaleap",
-            evidence: {
-              unit: product.unit,
-              subUnit: product.subUnit,
-              subQty: product.subQty,
-              minQty: product.minQty,
-              maxQty: product.maxQty,
-              clickMultiplier: product.clickMultiplier,
-            },
-          })
-        : undefined;
+      const purchaseTerms = extractGarridoPurchaseTerms(product, input);
 
       return ok(
         shopId,

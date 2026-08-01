@@ -79,7 +79,7 @@ export async function scrapeSirenaPrice(
       null,
       undefined,
       undefined,
-      extractSirenaVtexPurchaseTerms(normalizedProduct)
+      extractSirenaVtexPurchaseTerms(normalizedProduct, input)
     );
   }
 

@@ -97,3 +97,41 @@ test("uses the VTEX multiplier as the measured purchase increment", () => {
   assert.equal(terms?.increment, "0.5");
   assert.equal(terms?.priceReferenceQuantity, "1");
 });
+
+test("corrects an extreme VTEX multiplier from the explicit item label", () => {
+  const terms = extractSirenaVtexPurchaseTerms(
+    {
+      measurementUnit: "lb",
+      unitMultiplier: 100,
+      itemNameComplete: "Salchicha Sucarne Parrillera Lb 1 LB",
+    },
+    {
+      unit: "LB",
+      baseUnit: "LB",
+      baseUnitAmount: 1,
+    }
+  );
+
+  assert.equal(terms?.mode, "measure");
+  assert.equal(terms?.unit, "LB");
+  assert.equal(terms?.minimum, "1");
+  assert.equal(terms?.increment, "1");
+  assert.equal(terms?.evidence.correctedUnitMultiplier, 1);
+});
+
+test("uses the VTEX item label to reject a false measured package", () => {
+  const terms = extractSirenaVtexPurchaseTerms(
+    {
+      measurementUnit: "lb",
+      unitMultiplier: 0.5,
+      itemNameComplete: "Queso Shredded Mozzarella 7 Oz 1 Und.",
+    },
+    {
+      unit: "7 OZ",
+      baseUnit: "OZ",
+      baseUnitAmount: 7,
+    }
+  );
+
+  assert.equal(terms, null);
+});
