@@ -29,6 +29,18 @@ function isCsvFile(file: FileInfo) {
   return file.type === "-" && file.name.toLowerCase().endsWith(".csv");
 }
 
+export function isRitmoProductCatalogFilename(filename: string) {
+  const normalizedFilename = filename.trim().toLowerCase();
+  return (
+    normalizedFilename.startsWith("catalogo_productos_") &&
+    normalizedFilename.endsWith(".csv")
+  );
+}
+
+function isRitmoProductCatalogFile(file: FileInfo) {
+  return file.type === "-" && isRitmoProductCatalogFilename(file.name);
+}
+
 function toRemotePath(remoteDir: string, filenameOrPath: string) {
   if (filenameOrPath.startsWith("/")) {
     return filenameOrPath;
@@ -162,7 +174,7 @@ export async function downloadRitmoSftpCsv(
             modifyTime: 0,
           }
         : (await client.list(config.remoteDir))
-            .filter(isCsvFile)
+            .filter(isRitmoProductCatalogFile)
             .map((entry) => normalizeListedFile(config.remoteDir, entry))
             .sort((left, right) => {
               const timeDiff = right.modifyTime - left.modifyTime;
@@ -170,7 +182,9 @@ export async function downloadRitmoSftpCsv(
             })[0];
 
     if (!file) {
-      throw new Error(`No CSV files found in ${config.remoteDir}`);
+      throw new Error(
+        `No Ritmo Catalogo_Productos CSV files found in ${config.remoteDir}`
+      );
     }
 
     const content = await toBuffer(await client.get(file.remotePath));

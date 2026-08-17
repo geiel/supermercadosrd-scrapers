@@ -254,17 +254,20 @@ Defaults:
 
 Behavior:
 
-- Connects to Ritmo's SFTP and downloads the most recently modified CSV in
-  `/upload`.
-- Parses `SKU`, `Descripcion`, `Codigo de Barras`, `Precio`, and `Marca`.
+- Connects to Ritmo's SFTP and downloads the most recently modified
+  `Catalogo_Productos_*.csv` in `/upload`. It ignores `Catalogo_Nuevos_*.csv`
+  during automatic selection.
+- Parses `SKU`, `Descripcion`, `Codigo de Barras`, `Precio`, `Marca`, and
+  `Estado`.
 - Matches existing Ritmo rows by `products_shops_prices.api =
   ritmo://sku/<SKU>`.
 - Updates current prices and inserts a complete `products_prices_history`
   snapshot when the selling or regular price changes. Ritmo currently reports
   no separate regular price, so its snapshots store `regularPrice = NULL`.
-- Unhides matched SKUs with a positive price.
-- Hides existing Ritmo rows whose SKU is missing from the CSV or whose CSV
-  price is `0`/invalid.
+- Unhides matched SKUs with a positive price and an `Estado` of `Activo` or
+  `Temporada`.
+- Hides existing Ritmo rows whose SKU is missing from the CSV, whose CSV price
+  is `0`/invalid, or whose `Estado` is not `Activo` or `Temporada`.
 - Leaves new, unlinked SKUs skipped for the admin linking workflow.
 
 ## GitHub Actions workflows

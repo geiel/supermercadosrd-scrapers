@@ -7,6 +7,7 @@ export type RitmoPriceCsvRow = {
   rawBarcode: string | null;
   price: string | null;
   csvBrand: string | null;
+  status: string | null;
 };
 
 export type RitmoPriceCsvParseResult = {
@@ -20,7 +21,10 @@ type HeaderIndexes = {
   barcodeIndex: number;
   priceIndex: number;
   brandIndex: number;
+  statusIndex: number;
 };
+
+const VISIBLE_RITMO_STATUSES = new Set(["activo", "temporada"]);
 
 function normalizeText(value: unknown) {
   return String(value ?? "")
@@ -34,6 +38,17 @@ function normalizeHeader(value: unknown) {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "");
+}
+
+function normalizeStatus(value: unknown) {
+  return normalizeText(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+export function isVisibleRitmoStatus(status: string | null) {
+  return VISIBLE_RITMO_STATUSES.has(normalizeStatus(status));
 }
 
 function cleanSpreadsheetText(value: unknown) {
@@ -100,6 +115,7 @@ function inferHeaderIndexes(headerRow: unknown[]): HeaderIndexes {
   ]);
   const priceIndex = findIndex(["precio", "pvp", "price"]);
   const brandIndex = findIndex(["marca", "brand"]);
+  const statusIndex = findIndex(["estado", "status"]);
 
   if (skuIndex < 0) {
     throw new Error("Ritmo CSV must include a SKU column");
@@ -113,12 +129,17 @@ function inferHeaderIndexes(headerRow: unknown[]): HeaderIndexes {
     throw new Error("Ritmo CSV must include a price column");
   }
 
+  if (statusIndex < 0) {
+    throw new Error("Ritmo CSV must include a status column");
+  }
+
   return {
     skuIndex,
     descriptionIndex,
     barcodeIndex,
     priceIndex,
     brandIndex,
+    statusIndex,
   };
 }
 
@@ -158,6 +179,7 @@ function rowsFromCsvRecords(records: unknown[][]): RitmoPriceCsvParseResult {
         indexes.brandIndex >= 0
           ? cleanSpreadsheetText(record[indexes.brandIndex]) || null
           : null,
+      status: cleanSpreadsheetText(record[indexes.statusIndex]) || null,
     });
   }
 

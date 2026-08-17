@@ -3,7 +3,11 @@ import { db } from "../db/client.js";
 import { recordProductPriceStateInTransaction } from "../db/product-price-history.js";
 import { revalidateProduct } from "../db/revalidate-product.js";
 import { productsShopsPrices } from "../db/schema.js";
-import { isPositivePrice, type RitmoPriceCsvRow } from "./price-csv.js";
+import {
+  isPositivePrice,
+  isVisibleRitmoStatus,
+  type RitmoPriceCsvRow,
+} from "./price-csv.js";
 
 const DEFAULT_RITMO_SHOP_ID = 9;
 const RITMO_SHOP_URL = "https://tiendasritmo.com/";
@@ -15,6 +19,8 @@ export type RitmoSftpPriceSyncSummary = {
   csvRows: number;
   positivePriceRows: number;
   hiddenPriceRows: number;
+  visibleRows: number;
+  hiddenStatusRows: number;
   matchedRows: number;
   updatedRows: number;
   changedRows: number;
@@ -129,8 +135,11 @@ export async function applyRitmoSftpPriceSync(
   const shopId = getRitmoShopId(input.shopId);
   const rows = uniqueRowsBySku(input.rows);
   const positiveRows = rows.filter((row) => isPositivePrice(row.price));
-  const positiveSourceUrls = Array.from(
-    new Set(positiveRows.flatMap((row) => getRitmoSourceUrlCandidates(row.sku)))
+  const visibleRows = positiveRows.filter((row) =>
+    isVisibleRitmoStatus(row.status)
+  );
+  const visibleSourceUrls = Array.from(
+    new Set(visibleRows.flatMap((row) => getRitmoSourceUrlCandidates(row.sku)))
   );
   const dryRun = input.dryRun === true;
 
@@ -140,6 +149,8 @@ export async function applyRitmoSftpPriceSync(
     csvRows: rows.length,
     positivePriceRows: positiveRows.length,
     hiddenPriceRows: rows.length - positiveRows.length,
+    visibleRows: visibleRows.length,
+    hiddenStatusRows: positiveRows.length - visibleRows.length,
     matchedRows: 0,
     updatedRows: 0,
     changedRows: 0,
@@ -153,7 +164,7 @@ export async function applyRitmoSftpPriceSync(
 
   const affectedProductIds = new Set<number>();
   const currentRows =
-    positiveSourceUrls.length > 0
+    visibleSourceUrls.length > 0
       ? await db
           .select({
             productId: productsShopsPrices.productId,
@@ -176,7 +187,7 @@ export async function applyRitmoSftpPriceSync(
           .where(
             and(
               eq(productsShopsPrices.shopId, shopId),
-              inArray(productsShopsPrices.api, positiveSourceUrls)
+              inArray(productsShopsPrices.api, visibleSourceUrls)
             )
           )
       : [];
@@ -184,7 +195,7 @@ export async function applyRitmoSftpPriceSync(
   const now = new Date();
 
   await db.transaction(async (tx) => {
-    for (const row of positiveRows) {
+    for (const row of visibleRows) {
       const canonicalSourceUrl = getRitmoSourceUrl(row.sku);
       const current = getRitmoSourceUrlCandidates(row.sku)
         .map((sourceUrl) => currentByApi.get(sourceUrl))
@@ -270,9 +281,9 @@ export async function applyRitmoSftpPriceSync(
     const hideWhere = and(
       eq(productsShopsPrices.shopId, shopId),
       sql`${productsShopsPrices.api} like ${`${RITMO_SOURCE_PREFIX}%`}`,
-      positiveSourceUrls.length > 0
+      visibleSourceUrls.length > 0
         ? sql`${productsShopsPrices.api} not in (${sql.join(
-            positiveSourceUrls.map((sourceUrl) => sql`${sourceUrl}`),
+            visibleSourceUrls.map((sourceUrl) => sql`${sourceUrl}`),
             sql`, `
           )})`
         : undefined,
