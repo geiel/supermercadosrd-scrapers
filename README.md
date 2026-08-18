@@ -30,6 +30,7 @@ Standalone public project for Dominican supermarket scraping.
   - `scrape:recover-hidden-products` (recommended cadence: every 6-12 hours)
   - `scrape:broken-images-batch` (recommended cadence: every 30-60 minutes)
   - `scrape:deals` (recommended cadence: every 3 hours)
+  - `scrape:pedidosya-catalog` (manual diagnostic; does not write to the DB)
 
 ## Required environment variables
 
@@ -50,11 +51,46 @@ Optional:
 - `RITMO_SHOP_ID` (defaults to `9`)
 - `CARREFOUR_TYPESENSE_API_KEY` (defaults to the public Carrefour key)
 - `CARREFOUR_PLAZA_DUARTE_COLLECTION_ID` (defaults to Plaza Duarte)
+- `PEDIDOSYA_EXTRA_HEADERS_JSON` (optional JSON object supplied by PedidosYa)
+- `PEDIDOSYA_PROXY_SERVER` (optional approved/static egress proxy)
+- `PEDIDOSYA_PROXY_USERNAME` and `PEDIDOSYA_PROXY_PASSWORD` (optional proxy auth)
+- `PEDIDOSYA_CHROME_EXECUTABLE` (optional system Chrome path)
+- `PEDIDOSYA_HEADLESS=false` (uses headed Chrome; the workflow provides Xvfb)
 
 `Merca Jumbo` uses a private Nacional store view. This public repo intentionally
 reads its runtime identifiers from environment variables instead of committing
 them into source control. If the DB row already contains the GraphQL `api`, only
 `MERCA_JUMBO_STORE_CODE` is required at runtime.
+
+## PedidosYa catalogue diagnostic
+
+The `scrape-pedidosya-catalog` workflow is a manual, read-only test for the
+PedidosYa Market web catalogue. It opens the public menu in Chrome, captures the
+category and product JSON used by the site, follows product pagination, and
+uploads these artifacts:
+
+- `pedidosya-run-report.json` with block/error/success status and API exchanges
+- `pedidosya-categories.json` with normalized and raw categories
+- `pedidosya-products.json` with normalized products and their raw API records
+- `pedidosya-products.csv` for quick inspection
+- a screenshot and HTML snapshot when the website blocks the runner
+
+It never connects to `DATABASE_URL` and never changes product or price data.
+Run it locally with:
+
+```bash
+pnpm scrape:pedidosya-catalog \
+  --vendor-id 180650 \
+  --max-pages 50 \
+  --output-dir artifacts/pedidosya
+```
+
+The GitHub workflow uses system Chrome with Xvfb. A `blocked` result means the
+scraper reached PedidosYa but Cloudflare or another access policy rejected the
+runner before catalogue JSON was available. In that case, ask PedidosYa to
+allowlist an approved static egress IP or supply their authorized headers. The
+workflow supports the optional proxy and header environment variables listed
+above so that approved access can be tested without committing credentials.
 
 ## Install
 

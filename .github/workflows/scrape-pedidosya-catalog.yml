@@ -1,0 +1,91 @@
+name: scrape-pedidosya-catalog
+
+on:
+  workflow_dispatch:
+    inputs:
+      menu_url:
+        description: PedidosYa Market menu URL
+        required: true
+        type: string
+        default: https://www.pedidosya.com.do/restaurantes/santo-domingo-d.n./pedidosya-market-27-de-febrero-1686b9bb-4572-4a11-b11a-8f790c95c88e-menu
+      vendor_id:
+        description: PedidosYa vendor ID observed in the catalogue API
+        required: true
+        type: string
+        default: "180650"
+      max_pages:
+        description: Maximum number of 20-product pages per category
+        required: true
+        type: number
+        default: 50
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  scrape-pedidosya-catalog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8.14.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chrome for Puppeteer
+        run: pnpm exec puppeteer browsers install chrome
+
+      - name: Prefer system Google Chrome
+        shell: bash
+        run: |
+          chrome_path="$(command -v google-chrome || command -v google-chrome-stable || true)"
+          if [[ -n "$chrome_path" ]]; then
+            echo "PEDIDOSYA_CHROME_EXECUTABLE=$chrome_path" >> "$GITHUB_ENV"
+          fi
+
+      - name: Scrape PedidosYa catalogue
+        env:
+          PEDIDOSYA_HEADLESS: "false"
+          PEDIDOSYA_EXTRA_HEADERS_JSON: ${{ secrets.PEDIDOSYA_EXTRA_HEADERS_JSON }}
+          PEDIDOSYA_PROXY_SERVER: ${{ secrets.PEDIDOSYA_PROXY_SERVER }}
+          PEDIDOSYA_PROXY_USERNAME: ${{ secrets.PEDIDOSYA_PROXY_USERNAME }}
+          PEDIDOSYA_PROXY_PASSWORD: ${{ secrets.PEDIDOSYA_PROXY_PASSWORD }}
+        run: |
+          xvfb-run -a pnpm scrape:pedidosya-catalog \
+            --url "${{ inputs.menu_url }}" \
+            --vendor-id "${{ inputs.vendor_id }}" \
+            --max-pages "${{ inputs.max_pages }}" \
+            --output-dir artifacts/pedidosya
+
+      - name: Add result to job summary
+        if: always()
+        shell: bash
+        run: |
+          report="artifacts/pedidosya/pedidosya-run-report.json"
+          if [[ -f "$report" ]]; then
+            echo "## PedidosYa catalogue test" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            jq -r '"- Status: `\(.status)`\n- Reason: `\(.reason // "none")`\n- Categories: \(.categoriesFound)\n- Products: \(.productsFound)\n- Elapsed: \(.elapsedMs) ms"' "$report" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload diagnostic catalogue
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pedidosya-catalog-${{ github.run_id }}
+          path: artifacts/pedidosya
+          if-no-files-found: warn
+          retention-days: 14
