@@ -67,9 +67,7 @@ function getSftpConfig(args: Map<string, string>): RitmoSftpConfig {
   return {
     host:
       args.get("--host") ??
-      optionalEnv("RITMO_SFTP_HOST") ??
-      optionalEnv("SFTP_HOST") ??
-      "76.13.108.74",
+      requiredEnv(["RITMO_SFTP_HOST", "SFTP_HOST"]),
     port: parseNumber(
       args.get("--port") ?? optionalEnv("RITMO_SFTP_PORT") ?? optionalEnv("SFTP_PORT"),
       2222,
