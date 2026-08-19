@@ -1,8 +1,9 @@
 import * as cheerio from "cheerio";
-import { z } from "zod";
+import { NACIONAL_REST_API_URL } from "../api-endpoints.js";
 import {
   fetchWithRetryDetailed,
   getNacionalHeaders,
+  type FetchFailureReason,
 } from "../http-client.js";
 import { extractNacionalSku } from "../recovery/shared.js";
 import { error, notFound, ok } from "../result.js";
@@ -11,63 +12,25 @@ import type {
   ScrapePriceInput,
   ScrapePriceResult,
 } from "../types.js";
-import {
-  extractMagentoGraphqlPurchaseTerms,
-  magentoPurchaseTermsGraphqlFields,
-  magentoPurchaseTermsGraphqlSchema,
-} from "./magento-graphql-purchase-terms.js";
 
 const shopId = 2;
 const NACIONAL_HOST = "supermercadosnacional.com";
-const NACIONAL_GRAPHQL_URL = `https://${NACIONAL_HOST}/graphql`;
+const NACIONAL_WEBSITE_ID = 1;
 
-const nacionalProductQuery = `query NacionalProductBySku($sku: String!) {
-  products(filter: { sku: { eq: $sku } }) {
-    items {
-      sku
-${magentoPurchaseTermsGraphqlFields}
-      price_range {
-        minimum_price {
-          final_price {
-            value
-          }
-          regular_price {
-            value
-          }
-        }
-      }
-    }
-  }
-}`;
-
-const nacionalProductResponseSchema = z.object({
-  data: z.object({
-    products: z.object({
-      items: z
-        .array(
-          z
-            .object({
-              sku: z.string(),
-              price_range: z
-                .object({
-                  minimum_price: z.object({
-                    final_price: z.object({
-                      value: z.number().nullable().optional(),
-                    }),
-                    regular_price: z.object({
-                      value: z.number().nullable().optional(),
-                    }),
-                  }),
-                })
-                .nullable()
-                .optional(),
-            })
-            .merge(magentoPurchaseTermsGraphqlSchema)
-        )
-        .default([]),
-    }),
-  }),
-});
+type NacionalProductLookupResponse = {
+  items?: Array<{
+    sku?: string;
+    status?: unknown;
+    price?: unknown;
+    extension_attributes?: {
+      website_ids?: unknown;
+    };
+    custom_attributes?: Array<{
+      attribute_code?: string;
+      value?: unknown;
+    }>;
+  }>;
+};
 
 export type NacionalPageInspectionResult =
   | {
@@ -181,10 +144,75 @@ export async function inspectNacionalProductPage(
   };
 }
 
-function toPriceString(value: number | null | undefined) {
-  return value === null || value === undefined || Number.isNaN(value)
-    ? null
-    : String(value);
+function buildNacionalProductLookupUrl(sku: string): string {
+  const params = new URLSearchParams({
+    "searchCriteria[filter_groups][0][filters][0][field]": "sku",
+    "searchCriteria[filter_groups][0][filters][0][value]": sku,
+    "searchCriteria[filter_groups][0][filters][0][condition_type]": "eq",
+    fields:
+      "items[sku,status,price,extension_attributes[website_ids],custom_attributes[attribute_code,value]],total_count",
+  });
+
+  return `${NACIONAL_REST_API_URL}?${params.toString()}`;
+}
+
+function parsePrice(value: unknown): number | null {
+  const price =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : NaN;
+
+  return Number.isFinite(price) ? price : null;
+}
+
+function parseMagentoDate(value: unknown): Date | null {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+
+  const normalized = value.trim().replace(" ", "T");
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getAttributeValue(
+  product: NonNullable<NacionalProductLookupResponse["items"]>[number],
+  code: string
+): unknown {
+  return product.custom_attributes?.find(
+    (attribute) => attribute.attribute_code === code
+  )?.value;
+}
+
+function isNacionalWebsiteProduct(
+  product: NonNullable<NacionalProductLookupResponse["items"]>[number]
+): boolean {
+  const websiteIds = product.extension_attributes?.website_ids;
+  if (!Array.isArray(websiteIds)) {
+    return false;
+  }
+
+  return websiteIds.some((websiteId) => Number(websiteId) === NACIONAL_WEBSITE_ID);
+}
+
+function isSpecialPriceActive(
+  product: NonNullable<NacionalProductLookupResponse["items"]>[number],
+  now = new Date()
+): boolean {
+  const fromDate = parseMagentoDate(getAttributeValue(product, "special_from_date"));
+  const toDate = parseMagentoDate(getAttributeValue(product, "special_to_date"));
+
+  if (fromDate && now < fromDate) {
+    return false;
+  }
+
+  if (toDate && now > toDate) {
+    return false;
+  }
+
+  return true;
 }
 
 export async function scrapeNacionalPrice(
@@ -197,22 +225,13 @@ export async function scrapeNacionalPrice(
   }
 
   const result = await fetchWithRetryDetailed(
-    NACIONAL_GRAPHQL_URL,
+    buildNacionalProductLookupUrl(sku),
     {
-      method: "POST",
       headers: {
         Accept: "application/json",
-        "Content-Type": "application/json",
-        Origin: "https://supermercadosnacional.com",
         Referer: "https://supermercadosnacional.com/",
         "User-Agent": getNacionalHeaders()["User-Agent"],
       },
-      body: JSON.stringify({
-        query: nacionalProductQuery,
-        variables: {
-          sku,
-        },
-      }),
     },
     requestConfig
   );
@@ -224,55 +243,44 @@ export async function scrapeNacionalPrice(
   if (!result.response.ok) {
     return error(
       shopId,
-      `http_${result.response.status}`,
+      `http_${result.response.status}` satisfies FetchFailureReason,
       result.response.status >= 500 || result.response.status === 429,
       false
     );
   }
 
-  const parsedResponse = nacionalProductResponseSchema.safeParse(
-    await result.response.json().catch(() => null)
-  );
-  if (!parsedResponse.success) {
+  const payload = (await result.response
+    .json()
+    .catch(() => null)) as NacionalProductLookupResponse | null;
+  if (!payload || !Array.isArray(payload.items)) {
     return error(shopId, "invalid_payload", false, false);
   }
 
-  const product =
-    parsedResponse.data.data.products.items.find(
-      (candidate) => candidate.sku === sku
-    ) ?? null;
+  const product = payload.items.find((item) => item.sku === sku);
 
   if (!product) {
     return notFound(shopId, "product_not_found", true);
   }
 
-  const finalPriceValue =
-    product.price_range?.minimum_price.final_price.value ?? null;
-  const finalPrice = toPriceString(finalPriceValue);
-  if (!finalPrice) {
+  if (Number(product.status) !== 1 || !isNacionalWebsiteProduct(product)) {
+    return notFound(shopId, "product_not_found", true);
+  }
+
+  const regularPrice = parsePrice(product.price);
+  const specialPrice = parsePrice(getAttributeValue(product, "special_price"));
+
+  if (regularPrice === null) {
     return error(shopId, "price_not_found", false, false);
   }
 
-  const regularPriceValue =
-    product.price_range?.minimum_price.regular_price.value ?? null;
-  const regularPrice =
-    regularPriceValue !== null &&
-    regularPriceValue !== undefined &&
-    regularPriceValue > Number(finalPrice)
-      ? toPriceString(regularPriceValue)
-      : null;
-  const purchaseTerms = extractMagentoGraphqlPurchaseTerms(product, {
-    source: "nacional_graphql",
-    productUnit: input,
-  });
+  if (
+    specialPrice !== null &&
+    specialPrice > 0 &&
+    specialPrice < regularPrice &&
+    isSpecialPriceActive(product)
+  ) {
+    return ok(shopId, specialPrice.toString(), regularPrice.toString());
+  }
 
-  return ok(
-    shopId,
-    finalPrice,
-    regularPrice,
-    null,
-    undefined,
-    undefined,
-    purchaseTerms
-  );
+  return ok(shopId, regularPrice.toString(), null);
 }
