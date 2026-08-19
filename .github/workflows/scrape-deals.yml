@@ -33,6 +33,16 @@ jobs:
       - name: Install Chrome for Puppeteer
         run: pnpm exec puppeteer browsers install chrome
 
+      - name: Route revalidation directly to VPS
+        env:
+          REVALIDATE_ORIGIN_IP: ${{ secrets.REVALIDATE_ORIGIN_IP }}
+        run: |
+          if [ -z "$REVALIDATE_ORIGIN_IP" ]; then
+            echo "::error::REVALIDATE_ORIGIN_IP is not configured"
+            exit 1
+          fi
+          printf '%s\t%s\n' "$REVALIDATE_ORIGIN_IP" "supermercadosrd.com" | sudo tee -a /etc/hosts >/dev/null
+
       - name: Run deals scraper
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
