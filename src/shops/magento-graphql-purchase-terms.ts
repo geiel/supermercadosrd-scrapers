@@ -5,7 +5,7 @@ import {
   type PurchaseTerms,
 } from "../purchase-terms.js";
 import type { ScrapePriceInput } from "../types.js";
-import { formatUnit, parseProductUnit } from "../unit-utils.js";
+import { parseProductUnit } from "../unit-utils.js";
 
 export const magentoPurchaseTermsGraphqlFields = `
       label_peso_variable
@@ -69,14 +69,6 @@ function getCustomAttribute(
   )?.value;
 }
 
-function hasExplicitContentAmount(unit: string | null | undefined) {
-  if (!unit?.trim()) {
-    return false;
-  }
-
-  return /^\d+(?:\.\d+)?\s+/.test(formatUnit(unit));
-}
-
 function hasFractionalPurchaseQuantity(product: MagentoGraphqlPurchaseFields) {
   return [product.min_qty, product.qty_increments].some((value) => {
     const parsed = Number(value);
@@ -104,7 +96,7 @@ export function extractMagentoGraphqlPurchaseTerms(
     source: string;
     productUnit?: Pick<
       ScrapePriceInput,
-      "unit" | "baseUnit" | "baseUnitAmount"
+      "presentation" | "purchaseMode" | "purchaseUnit"
     >;
   }
 ) {
@@ -115,9 +107,8 @@ export function extractMagentoGraphqlPurchaseTerms(
     min_qty: product.min_qty,
     qty_increments: product.qty_increments,
     peso_variable: rawPesoVariable,
-    productUnit: input.productUnit?.unit,
-    baseUnit: input.productUnit?.baseUnit,
-    baseUnitAmount: input.productUnit?.baseUnitAmount,
+    productUnit: input.productUnit?.presentation,
+
   };
   const hasFractionalQuantity = hasFractionalPurchaseQuantity(product);
 
@@ -159,11 +150,11 @@ export function extractMagentoGraphqlPurchaseTerms(
       ) {
         return undefined;
       }
-    } else if (
+    } else if (input.productUnit.purchaseMode !== "measure" && (
       parsedProductUnit.measurement === "count" ||
-      hasExplicitContentAmount(input.productUnit.unit) ||
+      input.productUnit.purchaseMode === "unit" ||
       parsedProductUnit.amount !== 1
-    ) {
+    )) {
       return standardTermsOrNull(
         buildPurchaseTerms({
           mode: "unit",
@@ -178,6 +169,7 @@ export function extractMagentoGraphqlPurchaseTerms(
       );
     }
 
+    if (!hasFractionalQuantity && input.productUnit.purchaseMode !== "measure") return undefined;
     if (
       !labelUnit ||
       labelUnit === "UND" ||
@@ -194,7 +186,7 @@ export function extractMagentoGraphqlPurchaseTerms(
     return undefined;
   }
 
-  if (pesoVariable === true && input.productUnit) {
+  if (pesoVariable === true && input.productUnit && input.productUnit.purchaseMode !== "measure") {
     const parsedProductUnit = parseProductUnit(input.productUnit);
     if (
       parsedProductUnit &&

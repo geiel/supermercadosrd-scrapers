@@ -14,9 +14,8 @@ test("treats an explicit legacy package size as a whole unit", () => {
       producttype_decimal: 0,
     },
     {
-      unit: "16 OZ",
-      baseUnit: "OZ",
-      baseUnitAmount: "16",
+      presentation: "16 OZ",
+
     }
   );
 
@@ -31,9 +30,9 @@ test("treats an explicit one-pound legacy package as a whole unit", () => {
       producttype_decimal: 0,
     },
     {
-      unit: "1 LB",
-      baseUnit: "LB",
-      baseUnitAmount: "1",
+      presentation: "1 LB",
+      purchaseMode: "unit",
+
     }
   );
 
@@ -48,9 +47,8 @@ test("recognizes positive legacy decimal precision as measured sale", () => {
       producttype_decimal: 2,
     },
     {
-      unit: "LB",
-      baseUnit: "LB",
-      baseUnitAmount: "1",
+      presentation: "1 LB",
+
     }
   );
 
@@ -67,9 +65,8 @@ test("preserves legacy rules when decimal support is missing", () => {
       producttype_step: "1.00",
     },
     {
-      unit: "16 OZ",
-      baseUnit: "OZ",
-      baseUnitAmount: "16",
+      presentation: "16 OZ",
+
     }
   );
 
@@ -106,9 +103,8 @@ test("corrects an extreme VTEX multiplier from the explicit item label", () => {
       itemNameComplete: "Salchicha Sucarne Parrillera Lb 1 LB",
     },
     {
-      unit: "LB",
-      baseUnit: "LB",
-      baseUnitAmount: 1,
+      presentation: "1 LB",
+
     }
   );
 
@@ -127,9 +123,8 @@ test("uses the VTEX item label to reject a false measured package", () => {
       itemNameComplete: "Queso Shredded Mozzarella 7 Oz 1 Und.",
     },
     {
-      unit: "7 OZ",
-      baseUnit: "OZ",
-      baseUnitAmount: 7,
+      presentation: "7 OZ",
+
     }
   );
 

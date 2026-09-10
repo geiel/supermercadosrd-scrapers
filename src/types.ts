@@ -18,9 +18,12 @@ export type ScrapePriceInput = {
   url: string;
   api?: string | null;
   locationId?: string | null;
-  unit?: string | null;
-  baseUnit?: string | null;
-  baseUnitAmount?: string | number | null;
+  /** Derived from product_measurements; not a stored product field. */
+  presentation?: string | null;
+  /** Existing offer terms remain separate from physical package contents. */
+  purchaseMode?: "unit" | "measure" | null;
+  purchaseUnit?: string | null;
+
 };
 
 export type FetchWithRetryConfig = {
@@ -45,11 +48,12 @@ export type ScrapePriceSuccess = {
   regularPrice: string | null;
   locationId?: string | null;
   canonicalUrl?: string;
-  productUnitUpdate?: {
-    unit: string;
-    baseUnit: string;
-    baseUnitAmount: string;
+  productMeasurementUpdate?: {
+    declaredUnit: string;
+    declaredQuantity: string;
+    canonicalQuantity: string;
   };
+
   purchaseTerms?: PurchaseTerms | null;
 };
 

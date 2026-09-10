@@ -1,7 +1,7 @@
 import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "./client.js";
 import {
-  products,
+  productMeasurements, measurementTypes,
   productsShopsPrices,
   type ProductShopPriceRow,
 } from "./schema.js";
@@ -32,12 +32,11 @@ export type ShopPriceRow = Pick<
   | "updateAt"
   | "hidden"
 > & {
-  unit?: string | null;
-  baseUnit?: string | null;
-  baseUnitAmount?: string | number | null;
+  presentation?: string | null;
+
 };
 
-type ProductUnitUpdate = NonNullable<ScrapePriceSuccess["productUnitUpdate"]>;
+type ProductMeasurementUpdate = NonNullable<ScrapePriceSuccess["productMeasurementUpdate"]>;
 
 function purchaseTermsPatch(purchaseTerms: PurchaseTerms | null) {
   if (purchaseTerms === null) {
@@ -116,8 +115,8 @@ async function hideProductPrice(row: ShopPriceRow) {
   await revalidateProduct(row.productId);
 }
 
-async function productHasOtherVisibleShopPrices(row: ShopPriceRow) {
-  const otherShopPrice = await db
+async function productHasOtherVisibleShopPrices(row: ShopPriceRow, client: Pick<typeof db, "select"> = db) {
+  const otherShopPrice = await client
     .select({ productId: productsShopsPrices.productId })
     .from(productsShopsPrices)
     .where(
@@ -155,88 +154,27 @@ async function touchProductPrice(
     );
 }
 
-async function applyProductUnitUpdate(
-  row: ShopPriceRow,
-  unitUpdate: ProductUnitUpdate
-) {
-  const [product] = await db
-    .select({
-      id: products.id,
-      name: products.name,
-      brandId: products.brandId,
-      unit: products.unit,
-    })
-    .from(products)
-    .where(eq(products.id, row.productId))
-    .limit(1);
-
-  if (!product) {
-    console.error(
-      `[ERROR] PriceSmart ${logPrefix(row)} unit_update_product_not_found`
-    );
-    return false;
-  }
-
-  if (!product.name || product.brandId === null) {
-    console.error(
-      `[ERROR] PriceSmart ${logPrefix(row)} unit_update_missing_product_identity`
-    );
-    return false;
-  }
-
-  if (await productHasOtherVisibleShopPrices(row)) {
-    console.log(
-      `[INFO] PriceSmart ${logPrefix(row)} skipped unit update because other shops also sell it`
-    );
+async function applyProductMeasurementUpdate(row: ShopPriceRow, update: ProductMeasurementUpdate) {
+  return db.transaction(async tx => {
+    const locked = await tx.execute(sql`select id from products where id=${row.productId} for update`);
+    if (!locked.length) return false;
+    // Do not let a shop-specific variable-weight pack redefine a shared product.
+    const types = await tx.select({id:measurementTypes.id}).from(measurementTypes)
+      .where(and(eq(measurementTypes.dimension,"mass"),eq(measurementTypes.quantityKind,"net_content")));
+    if(types.length!==1) return false;
+    const current = await tx.select().from(productMeasurements).where(and(
+      eq(productMeasurements.productId,row.productId),eq(productMeasurements.measurementTypeId,types[0].id),
+      sql`${productMeasurements.status} in ('verified','inferred','rejected')`));
+    const matches = (m: typeof current[number]) => Math.abs(Number(m.canonicalQuantity)-Number(update.canonicalQuantity))<=0.001;
+    if(current.some(m=>m.status==='verified'&&!matches(m))) return false;
+    if(current.some(m=>m.status!=='rejected' && matches(m))) return true;
+    if(current.some(m=>m.status==='rejected' && matches(m))) return false;
+    if (await productHasOtherVisibleShopPrices(row, tx)) return false;
+    await tx.insert(productMeasurements).values({productId:row.productId,measurementTypeId:types[0].id,...update,
+      status:"inferred",evidenceType:"retailer_source",sourceUrl:row.url,
+      evidence:{source:"pricesmart",api:row.api,locationId:row.locationId,observedAt:new Date().toISOString()}});
     return true;
-  }
-
-  const [conflictingProduct] = await db
-    .select({ id: products.id })
-    .from(products)
-    .where(
-      and(
-        eq(products.name, product.name),
-        eq(products.unit, unitUpdate.unit),
-        eq(products.brandId, product.brandId),
-        ne(products.id, row.productId)
-      )
-    )
-    .limit(1);
-
-  if (conflictingProduct) {
-    console.error(
-      `[ERROR] PriceSmart ${logPrefix(row)} unit_update_conflicts_with_product=${conflictingProduct.id}`
-    );
-    return false;
-  }
-
-  const updated = await db
-    .update(products)
-    .set({
-      unit: unitUpdate.unit,
-      baseUnit: unitUpdate.baseUnit,
-      baseUnitAmount: unitUpdate.baseUnitAmount,
-    })
-    .where(
-      and(
-        eq(products.id, row.productId),
-        or(
-          sql`${products.unit} IS DISTINCT FROM ${unitUpdate.unit}`,
-          sql`${products.baseUnit} IS DISTINCT FROM ${unitUpdate.baseUnit}`,
-          sql`${products.baseUnitAmount} IS DISTINCT FROM ${unitUpdate.baseUnitAmount}`
-        )
-      )
-    )
-    .returning({ id: products.id });
-
-  if (updated.length > 0) {
-    console.log(
-      `[INFO] PriceSmart ${logPrefix(row)} unit=${product.unit ?? "null"} -> ${unitUpdate.unit}`
-    );
-  }
-
-  return true;
+  });
 }
 
 export async function applyScrapeResult(
@@ -255,15 +193,15 @@ export async function applyScrapeResult(
     return;
   }
 
-  let updatedProductUnit = false;
-  if (result.productUnitUpdate) {
-    const applied = await applyProductUnitUpdate(row, result.productUnitUpdate);
+  let updatedProductMeasurement = false;
+  if (result.productMeasurementUpdate) {
+    const applied = await applyProductMeasurementUpdate(row, result.productMeasurementUpdate);
     if (!applied) {
       await hideProductPrice(row);
       return;
     }
 
-    updatedProductUnit = true;
+    updatedProductMeasurement = true;
   }
 
   const canonicalUrl = result.canonicalUrl?.trim() || null;
@@ -285,7 +223,7 @@ export async function applyScrapeResult(
 
   if (priceAndLocationUnchanged && !urlChanged && !termsChanged) {
     await touchProductPrice(row, result.purchaseTerms);
-    if (updatedProductUnit || row.hidden) {
+    if (updatedProductMeasurement || row.hidden) {
       await revalidateProduct(row.productId);
     }
     console.log(`[IGNORE] ${result.shopName} ${logPrefix(row)}`);
@@ -375,7 +313,7 @@ export async function applyScrapeResult(
   });
 
   if (updated.length === 0) {
-    if (updatedProductUnit) {
+    if (updatedProductMeasurement) {
       await revalidateProduct(row.productId);
     }
     console.log(`[DONE/IGNORE] ${result.shopName} ${logPrefix(row)}`);

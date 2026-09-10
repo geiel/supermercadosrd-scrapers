@@ -15,10 +15,8 @@ export const products = pgTable("products", {
   id: integer("id").primaryKey(),
   name: text("name"),
   image: text("image"),
-  unit: text("unit"),
   brandId: integer("brandId"),
-  baseUnit: text("baseUnit"),
-  baseUnitAmount: numeric("baseUnitAmount"),
+
   deleted: boolean("deleted"),
 });
 
@@ -76,7 +74,7 @@ export const productsShopsPrices = pgTable(
     locationId: text("locationId"),
     currentPrice: numeric("currentPrice"),
     regularPrice: numeric("regularPrice"),
-    purchaseMode: text("purchaseMode"),
+    purchaseMode: text("purchaseMode", { enum: ["unit", "measure"] }),
     purchaseUnit: text("purchaseUnit"),
     minimumPurchaseQuantity: numeric("minimumPurchaseQuantity"),
     purchaseQuantityIncrement: numeric("purchaseQuantityIncrement"),
@@ -244,3 +242,14 @@ export type ProductShopRecoveryReviewRow =
 export type NacionalCatalogSyncStateRow =
   typeof nacionalCatalogSyncState.$inferSelect;
 export type SirenaCatalogSyncStateRow = typeof sirenaCatalogSyncState.$inferSelect;
+
+export const measurementTypes = pgTable("measurement_types", {
+  id: integer("id").primaryKey(), key: text("key").notNull(), dimension: text("dimension").notNull(),
+  quantityKind: text("quantityKind").notNull(), canonicalUnit: text("canonicalUnit").notNull(),
+});
+export const productMeasurements = pgTable("product_measurements", {
+ id: integer("id").primaryKey().generatedAlwaysAsIdentity(), productId: integer("productId").notNull(),
+ measurementTypeId: integer("measurementTypeId"), declaredQuantity: numeric("declaredQuantity").notNull(), declaredUnit: text("declaredUnit").notNull(),
+ canonicalQuantity: numeric("canonicalQuantity").notNull(), status: text("status").notNull(), evidenceType: text("evidenceType"), evidence: jsonb("evidence"),
+ sourceUrl:text("sourceUrl"),updatedAt:timestamp("updatedAt",{withTimezone:true}).notNull().defaultNow(),
+});

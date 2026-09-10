@@ -8,7 +8,7 @@ test("uses Plaza Lama unit when subUnit is blank", () => {
     resolvePlazaLamaPurchaseUnit({
       subUnit: "",
       unit: "LB",
-      baseUnit: "LB",
+
       productUnit: "LB",
     }),
     "LB"
@@ -20,7 +20,7 @@ test("prefers a non-empty Plaza Lama subUnit", () => {
     resolvePlazaLamaPurchaseUnit({
       subUnit: "UND",
       unit: "LB",
-      baseUnit: "LB",
+
       productUnit: "LB",
     }),
     "UND"
@@ -32,7 +32,7 @@ test("falls back to normalized product metadata", () => {
     resolvePlazaLamaPurchaseUnit({
       subUnit: " ",
       unit: null,
-      baseUnit: "LIBRA",
+
       productUnit: "LB",
     }),
     "LB"

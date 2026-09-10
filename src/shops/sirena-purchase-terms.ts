@@ -4,7 +4,7 @@ import {
   type PurchaseTerms,
 } from "../purchase-terms.js";
 import type { NormalizedSirenaVtexProduct } from "../sirena-vtex.js";
-import { formatUnit, parseProductUnit } from "../unit-utils.js";
+import { parseProductUnit } from "../unit-utils.js";
 import type { ScrapePriceInput } from "../types.js";
 
 type SirenaLegacyPurchaseFields = {
@@ -40,13 +40,6 @@ function parseDecimalSupport(value: unknown) {
   return null;
 }
 
-function hasExplicitContentAmount(unit: string | null | undefined) {
-  if (!unit?.trim()) {
-    return false;
-  }
-
-  return /^\d+(?:\.\d+)?\s+/.test(formatUnit(unit));
-}
 
 function standardTermsOrNull(
   terms: PurchaseTerms | undefined
@@ -64,7 +57,7 @@ function standardTermsOrNull(
 
 export function extractSirenaLegacyPurchaseTerms(
   product: SirenaLegacyPurchaseFields,
-  input: Pick<ScrapePriceInput, "unit" | "baseUnit" | "baseUnitAmount">
+  input: Pick<ScrapePriceInput, "presentation" | "purchaseMode" | "purchaseUnit">
 ) {
   const supportsDecimals = parseDecimalSupport(product.producttype_decimal);
   if (supportsDecimals === null) {
@@ -81,15 +74,14 @@ export function extractSirenaLegacyPurchaseTerms(
     minimum: product.minimum,
     producttype_step: product.producttype_step,
     producttype_decimal: product.producttype_decimal,
-    productUnit: input.unit,
-    baseUnit: input.baseUnit,
-    baseUnitAmount: input.baseUnitAmount,
+    productUnit: input.presentation,
+
   };
 
   if (
-    !supportsDecimals &&
+    !supportsDecimals && input.purchaseMode !== "measure" &&
     (parsedProductUnit.measurement === "count" ||
-      hasExplicitContentAmount(input.unit) ||
+      input.purchaseMode === "unit" ||
       parsedProductUnit.amount !== 1)
   ) {
     return standardTermsOrNull(
@@ -106,7 +98,8 @@ export function extractSirenaLegacyPurchaseTerms(
     );
   }
 
-  const unit = normalizePurchaseUnit(parsedProductUnit.normalizedUnit, "");
+  if (!supportsDecimals && input.purchaseMode !== "measure") return undefined;
+  const unit = normalizePurchaseUnit(input.purchaseUnit ?? parsedProductUnit.normalizedUnit, "");
   if (!unit || unit === "UND") {
     return undefined;
   }
@@ -156,7 +149,7 @@ export function extractSirenaVtexPurchaseTerms(
     "measurementUnit" | "unitMultiplier"
   > &
     Partial<Pick<NormalizedSirenaVtexProduct, "itemNameComplete">>,
-  input?: Pick<ScrapePriceInput, "unit" | "baseUnit" | "baseUnitAmount">
+  input?: Pick<ScrapePriceInput, "presentation" | "purchaseMode" | "purchaseUnit">
 ) {
   const unit = normalizeVtexPurchaseUnit(product.measurementUnit);
   if (!unit) {
@@ -167,9 +160,8 @@ export function extractSirenaVtexPurchaseTerms(
     measurementUnit: product.measurementUnit,
     unitMultiplier: product.unitMultiplier,
     itemNameComplete: product.itemNameComplete,
-    productUnit: input?.unit,
-    baseUnit: input?.baseUnit,
-    baseUnitAmount: input?.baseUnitAmount,
+    productUnit: input?.presentation,
+
   };
 
   if (unit === "UND") {

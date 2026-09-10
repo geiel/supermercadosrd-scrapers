@@ -390,14 +390,13 @@ function getConsistentSourceUnit(candidates: PricesmartLocationCandidate[]) {
   return candidatesWithSourceUnits[0];
 }
 
-function getProductUnitUpdate(
+function getProductMeasurementUpdate(
   candidates: PricesmartLocationCandidate[],
   selectedCandidate: PricesmartLocationCandidate,
   input: ScrapePriceInput,
   sourceCategories: unknown[] | undefined
 ) {
   if (
-    !input.unit?.trim() ||
     !isPricesmartUnitUpdateCategory(sourceCategories) ||
     selectedCandidate.soldByWeight !== true ||
     !selectedCandidate.sourceUnit ||
@@ -423,9 +422,10 @@ function getProductUnitUpdate(
   }
 
   return {
-    unit: selectedCandidate.sourceUnit,
-    baseUnit: selectedCandidate.parsedSourceUnit.normalizedUnit,
-    baseUnitAmount: formatAmount(selectedCandidate.parsedSourceUnit.amount),
+    declaredUnit: selectedCandidate.parsedSourceUnit.normalizedUnit,
+    declaredQuantity: String(selectedCandidate.parsedSourceUnit.amount),
+    canonicalQuantity: selectedCandidate.parsedSourceUnit.base.toFixed(3),
+
   };
 }
 
@@ -533,20 +533,20 @@ export async function scrapePricesmartPrice(
     return error(shopId, "do_price_not_found", false, true);
   }
 
-  const unitUpdate = getProductUnitUpdate(
+  const unitUpdate = getProductMeasurementUpdate(
     locationCandidates,
     currentPrice,
     input,
     currentProduct.categories
   );
-  const productUnitUpdatesAllowed = isPricesmartUnitUpdateCategory(
+  const productMeasurementUpdatesAllowed = isPricesmartUnitUpdateCategory(
     currentProduct.categories
   );
   const parsedInputUnit = parseProductUnit(input);
   const unitMismatch =
-    productUnitUpdatesAllowed &&
+    productMeasurementUpdatesAllowed &&
     currentPrice.soldByWeight === true &&
-    !!input.unit?.trim() &&
+    !!input.presentation?.trim() &&
     !!currentPrice.parsedSourceUnit &&
     !unitsAreClose(parsedInputUnit, currentPrice.parsedSourceUnit) &&
     !unitUpdate;
