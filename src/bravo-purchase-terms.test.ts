@@ -12,9 +12,8 @@ test("uses Bravo purchase type 1 for a whole packaged unit", () => {
       maxcantArticuloArticulo: 30,
     },
     {
-      unit: "225 GR",
-      baseUnit: "GR",
-      baseUnitAmount: 225,
+      presentation: "225 GR",
+
     }
   );
 
@@ -34,9 +33,8 @@ test("uses Bravo purchase type 2 for measured products", () => {
       maxcantArticuloArticulo: 30,
     },
     {
-      unit: "LB",
-      baseUnit: "LB",
-      baseUnitAmount: 1,
+      presentation: "1 LB",
+
     }
   );
 
@@ -55,9 +53,8 @@ test("preserves Bravo rules when the purchase type is missing", () => {
       maxcantArticuloArticulo: 30,
     },
     {
-      unit: "225 GR",
-      baseUnit: "GR",
-      baseUnitAmount: 225,
+      presentation: "225 GR",
+
     }
   );
 
@@ -73,9 +70,8 @@ test("preserves measured Bravo rules when the product unit is invalid", () => {
       maxcantArticuloArticulo: 30,
     },
     {
-      unit: "UND",
-      baseUnit: "UND",
-      baseUnitAmount: 1,
+      presentation: "1 UND",
+
     }
   );
 

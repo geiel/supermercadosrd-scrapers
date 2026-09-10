@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseUnit } from "../unit-utils.js";
 import { PLAZA_LAMA_GRAPHQL_URL } from "../api-endpoints.js";
 import { fetchWithRetry, getPlazaLamaHeaders } from "../http-client.js";
 import { error, notFound, ok } from "../result.js";
@@ -82,14 +83,13 @@ function getPlazaLamaSku(input: ScrapePriceInput): string | null {
 export function resolvePlazaLamaPurchaseUnit(input: {
   subUnit?: string | null;
   unit?: string | null;
-  baseUnit?: string | null;
+
   productUnit?: string | null;
 }) {
   const rawUnit = [
     input.subUnit,
     input.unit,
-    input.baseUnit,
-    input.productUnit,
+    input.productUnit ? parseUnit(input.productUnit)?.normalizedUnit : undefined,
   ].find((value) => typeof value === "string" && value.trim().length > 0);
 
   return normalizePurchaseUnit(rawUnit);
@@ -170,8 +170,8 @@ export async function scrapePlazaLamaPrice(
   const unit = resolvePlazaLamaPurchaseUnit({
     subUnit: first.subUnit,
     unit: first.unit,
-    baseUnit: input.baseUnit,
-    productUnit: input.unit,
+
+    productUnit: input.presentation,
   });
   const hasExactPurchaseFields = [
     first.subQty,

@@ -1,3 +1,4 @@
+import { parseProductUnit } from "../unit-utils.js";
 import {
   buildPurchaseTerms,
   normalizePurchaseUnit,
@@ -13,7 +14,7 @@ type BravoPurchaseFields = {
 
 export function extractBravoPurchaseTerms(
   product: BravoPurchaseFields,
-  input: Pick<ScrapePriceInput, "unit" | "baseUnit" | "baseUnitAmount">
+  input: Pick<ScrapePriceInput, "presentation">
 ) {
   const purchaseType = Number(product.idTipounidadArticulo);
   if (purchaseType !== 1 && purchaseType !== 2) {
@@ -24,7 +25,7 @@ export function extractBravoPurchaseTerms(
   const unit =
     purchaseType === 1
       ? "UND"
-      : normalizePurchaseUnit(input.baseUnit ?? input.unit, "");
+      : normalizePurchaseUnit(parseProductUnit(input)?.normalizedUnit ?? input.presentation, "");
 
   if (!unit || (mode === "measure" && unit === "UND")) {
     return undefined;
@@ -43,9 +44,8 @@ export function extractBravoPurchaseTerms(
       mincantArticuloArticulo: product.mincantArticuloArticulo,
       varcantArticuloArticulo: product.varcantArticuloArticulo,
       maxcantArticuloArticulo: product.maxcantArticuloArticulo,
-      productUnit: input.unit,
-      baseUnit: input.baseUnit,
-      baseUnitAmount: input.baseUnitAmount,
+      productUnit: input.presentation,
+
     },
   });
 }

@@ -39,7 +39,7 @@ function convertToBase(amount: number, unit: string, measurement: Measurement) {
         case "GR":
           return amount;
         case "OZ":
-          return amount * 28.35;
+          return amount * 28.349523125;
         case "LB":
           return amount * 453.59237;
         case "KG":
@@ -171,22 +171,7 @@ export function parseUnit(unitRaw: string): ParsedUnit | null {
   return { measurement, base, amount, normalizedUnit };
 }
 
-export function parseProductUnit(product: {
-  unit?: string | null;
-  baseUnit?: string | null;
-  baseUnitAmount?: string | number | null;
-}) {
-  const normalizedBaseUnit = product.baseUnit?.trim().toUpperCase() ?? null;
-  const baseUnitAmount = Number(product.baseUnitAmount);
-
-  if (
-    normalizedBaseUnit &&
-    Number.isFinite(baseUnitAmount) &&
-    baseUnitAmount > 0 &&
-    measurementByUnit[normalizedBaseUnit]
-  ) {
-    return parseUnit(`${formatAmount(baseUnitAmount)} ${normalizedBaseUnit}`);
-  }
-
-  return product.unit ? parseUnit(product.unit) : null;
+export function parseProductUnit(product: { presentation?: string | null }): ParsedUnit | null {
+  return product.presentation && /^\d+(?:\.\d+)?\s/.test(product.presentation.trim())
+    ? parseUnit(formatUnit(product.presentation)) : null;
 }

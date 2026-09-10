@@ -10,7 +10,7 @@ test("treats explicit Carrefour package content as whole units", () => {
       maxPurchase: 10,
       itemName: "Frutas Del Bosque Vima Foods 450 G",
     },
-    { unit: "450 GR", baseUnit: "GR", baseUnitAmount: 450 }
+    { presentation: "450 GR",}
   );
 
   assert.equal(terms?.mode, "unit");
@@ -19,10 +19,10 @@ test("treats explicit Carrefour package content as whole units", () => {
   assert.equal(terms?.maximum, "10");
 });
 
-test("keeps a bare Carrefour weight unit as measured sale", () => {
+test("preserves Carrefour measured offer terms with normalized package content", () => {
   const terms = extractCarrefourPurchaseTerms(
     { minPurchase: 1, maxPurchase: 10, itemName: "Aji Morron Rojo" },
-    { unit: "LB", baseUnit: "LB", baseUnitAmount: 1 }
+    { presentation: "1 LB", purchaseMode: "measure", purchaseUnit: "LB" }
   );
 
   assert.equal(terms?.mode, "measure");
@@ -33,7 +33,7 @@ test("does not infer Carrefour terms without product unit evidence", () => {
   assert.equal(
     extractCarrefourPurchaseTerms(
       { minPurchase: 1, maxPurchase: 10, itemName: "Producto" },
-      { unit: null, baseUnit: null, baseUnitAmount: null }
+      { presentation: null,}
     ),
     undefined
   );

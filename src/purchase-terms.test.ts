@@ -123,9 +123,8 @@ test("uses exact normalized product metadata for ambiguous Magento weight", () =
     {
       source: "fixture_graphql",
       productUnit: {
-        unit: "LB",
-        baseUnit: "LB",
-        baseUnitAmount: 1,
+        presentation: "1 LB",
+
       },
     }
   );
@@ -147,9 +146,8 @@ test("uses fractional Magento quantities as measured sale for a matching 1 LB pr
     {
       source: "fixture_graphql",
       productUnit: {
-        unit: "1 LB",
-        baseUnit: "LB",
-        baseUnitAmount: 1,
+        presentation: "1 LB",
+
       },
     }
   );
@@ -171,9 +169,8 @@ test("does not turn a fixed package into fractional whole units", () => {
     {
       source: "fixture_graphql",
       productUnit: {
-        unit: "8 OZ",
-        baseUnit: "OZ",
-        baseUnitAmount: 8,
+        presentation: "8 OZ",
+
       },
     }
   );
@@ -194,9 +191,8 @@ test("keeps ambiguous Magento package content as a whole unit", () => {
     {
       source: "fixture_graphql",
       productUnit: {
-        unit: "8 OZ",
-        baseUnit: "OZ",
-        baseUnitAmount: 8,
+        presentation: "8 OZ",
+
       },
     }
   );
@@ -217,9 +213,8 @@ test("preserves a non-standard unit minimum for an ambiguous Magento package", (
     {
       source: "fixture_graphql",
       productUnit: {
-        unit: "8 OZ",
-        baseUnit: "OZ",
-        baseUnitAmount: 8,
+        presentation: "8 OZ",
+
       },
     }
   );
@@ -243,9 +238,8 @@ test("preserves Magento rules when the API label conflicts with product metadata
     {
       source: "fixture_graphql",
       productUnit: {
-        unit: "KG",
-        baseUnit: "KG",
-        baseUnitAmount: 1,
+        presentation: "KG",
+
       },
     }
   );
@@ -266,9 +260,8 @@ test("clears explicit Magento measure rules that conflict with a fixed package",
     {
       source: "fixture_graphql",
       productUnit: {
-        unit: "8 KG",
-        baseUnit: "KG",
-        baseUnitAmount: 8,
+        presentation: "8 KG",
+
       },
     }
   );

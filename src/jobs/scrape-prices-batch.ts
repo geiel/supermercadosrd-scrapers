@@ -80,9 +80,10 @@ async function processShopPrice(
       url: shopPrice.url,
       api: shopPrice.api,
       locationId: shopPrice.locationId,
-      unit: shopPrice.unit,
-      baseUnit: shopPrice.baseUnit,
-      baseUnitAmount: shopPrice.baseUnitAmount,
+      presentation: shopPrice.presentation,
+      purchaseMode: shopPrice.purchaseMode,
+      purchaseUnit: shopPrice.purchaseUnit,
+
     },
     {
       timeoutMs,
@@ -165,9 +166,8 @@ async function main() {
             purchaseTermsSource: productsShopsPrices.purchaseTermsSource,
             updateAt: productsShopsPrices.updateAt,
             hidden: productsShopsPrices.hidden,
-            unit: products.unit,
-            baseUnit: products.baseUnit,
-            baseUnitAmount: products.baseUnitAmount,
+            presentation: sql<string>`product_measurement_label(${products.id})`,
+
           })
           .from(productsShopsPrices)
           .innerJoin(products, eq(productsShopsPrices.productId, products.id))

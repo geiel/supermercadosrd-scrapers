@@ -12,8 +12,7 @@ test("falls back from blank Garrido subUnit to the API unit", () => {
       subUnit: "",
       unit: "LB",
       productUnit: "LB",
-      baseUnit: "LB",
-      baseUnitAmount: 1,
+
     }),
     "LB"
   );
@@ -29,7 +28,7 @@ test("uses a fractional Garrido click multiplier as the measured increment", () 
       maxQty: 10,
       clickMultiplier: 0.5,
     },
-    { unit: "LB", baseUnit: "LB", baseUnitAmount: 1 }
+    { presentation: "1 LB",}
   );
 
   assert.equal(terms?.mode, "measure");
@@ -49,7 +48,7 @@ test("keeps Garrido package SKUs as whole units", () => {
       maxQty: 50,
       clickMultiplier: 1,
     },
-    { unit: "450 GR", baseUnit: "GR", baseUnitAmount: 450 }
+    { presentation: "450 GR",}
   );
 
   assert.equal(terms?.mode, "unit");
@@ -67,7 +66,7 @@ test("does not trust a Garrido weight unit that conflicts with the product", () 
       maxQty: 10,
       clickMultiplier: 0.5,
     },
-    { unit: "7 OZ", baseUnit: "OZ", baseUnitAmount: 7 }
+    { presentation: "7 OZ",}
   );
 
   assert.equal(terms, null);

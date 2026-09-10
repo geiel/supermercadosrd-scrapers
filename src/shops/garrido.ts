@@ -97,8 +97,7 @@ export function resolveGarridoPurchaseUnit(input: {
   subUnit?: string | null;
   unit?: string | null;
   productUnit?: string | null;
-  baseUnit?: string | null;
-  baseUnitAmount?: string | number | null;
+
 }) {
   const sourceUnit = normalizePurchaseUnit(
     firstNonEmptyString(input.subUnit, input.unit),
@@ -109,9 +108,8 @@ export function resolveGarridoPurchaseUnit(input: {
   }
 
   const parsedProductUnit = parseProductUnit({
-    unit: input.productUnit,
-    baseUnit: input.baseUnit,
-    baseUnitAmount: input.baseUnitAmount,
+    presentation: input.productUnit,
+
   });
   if (
     parsedProductUnit &&
@@ -232,7 +230,7 @@ function isWholePositive(value: number) {
 
 export function extractGarridoPurchaseTerms(
   product: GarridoPurchaseFields,
-  input: Pick<ScrapePriceInput, "unit" | "baseUnit" | "baseUnitAmount">
+  input: Pick<ScrapePriceInput, "presentation">
 ): PurchaseTerms | null | undefined {
   const hasExactPurchaseFields = [
     product.subQty,
@@ -252,9 +250,8 @@ export function extractGarridoPurchaseTerms(
   const unit = resolveGarridoPurchaseUnit({
     subUnit: product.subUnit,
     unit: product.unit,
-    productUnit: input.unit,
-    baseUnit: input.baseUnit,
-    baseUnitAmount: input.baseUnitAmount,
+    productUnit: input.presentation,
+
   });
 
   if (
@@ -279,9 +276,8 @@ export function extractGarridoPurchaseTerms(
       minQty: product.minQty,
       maxQty: product.maxQty,
       clickMultiplier: product.clickMultiplier,
-      productUnit: input.unit,
-      baseUnit: input.baseUnit,
-      baseUnitAmount: input.baseUnitAmount,
+      productUnit: input.presentation,
+
       resolvedUnit: unit,
     },
   });
