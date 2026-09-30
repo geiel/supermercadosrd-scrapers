@@ -44,5 +44,12 @@ export async function scrapeProductImages(
         shopName: "carrefour",
         reason: "image_scraper_not_supported",
       };
+    case 14:
+      return {
+        status: "not_found",
+        shopId: 14,
+        shopName: "supermix",
+        reason: "image_scraper_not_supported",
+      };
   }
 }

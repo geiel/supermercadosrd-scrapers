@@ -1,6 +1,6 @@
 import type { PurchaseTerms } from "./purchase-terms.js";
 
-export type ShopId = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 10;
+export type ShopId = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 10 | 14;
 
 export type ShopName =
   | "sirena"
@@ -11,7 +11,8 @@ export type ShopName =
   | "bravo"
   | "merca_jumbo"
   | "garrido"
-  | "carrefour";
+  | "carrefour"
+  | "supermix";
 
 export type ScrapePriceInput = {
   shopId: ShopId;
