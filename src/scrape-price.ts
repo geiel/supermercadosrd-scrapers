@@ -8,6 +8,7 @@ import {
   scrapePlazaLamaPrice,
   scrapePricesmartPrice,
   scrapeSirenaPrice,
+  scrapeSupermixPrice,
 } from "./shops/index.js";
 import type {
   FetchWithRetryConfig,
@@ -38,5 +39,7 @@ export async function scrapePrice(
       return scrapeGarridoPrice(input, requestConfig);
     case 10:
       return scrapeCarrefourPrice(input, requestConfig);
+    case 14:
+      return scrapeSupermixPrice(input, requestConfig);
   }
 }

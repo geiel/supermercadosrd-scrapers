@@ -11,7 +11,7 @@ import { randomDelay } from "../utils.js";
 const shopIds = [1, 2, 3, 4, 5, 6, 7, 8, 10] as const;
 
 function isShopId(value: number): value is ShopId {
-  return shopIds.includes(value as ShopId);
+  return (shopIds as readonly number[]).includes(value);
 }
 
 function parseArgs(argv: string[]) {

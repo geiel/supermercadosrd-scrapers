@@ -16,6 +16,7 @@ export const SHOP_NAMES: Record<ShopId, ShopName> = {
   7: "merca_jumbo",
   8: "garrido",
   10: "carrefour",
+  14: "supermix",
 };
 
 export function ok(
