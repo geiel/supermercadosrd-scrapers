@@ -56,6 +56,4 @@ jobs:
           POSTGRES_MAX_CONNECTIONS: "2"
           REVALIDATE_BASE_URL: ${{ secrets.REVALIDATE_BASE_URL }}
           REVALIDATION_SECRET: ${{ secrets.REVALIDATION_SECRET }}
-          SUPERMIX_STOREFRONT_API_URL: ${{ secrets.SUPERMIX_STOREFRONT_API_URL }}
-          SUPERMIX_STOREFRONT_ACCESS_TOKEN: ${{ secrets.SUPERMIX_STOREFRONT_ACCESS_TOKEN }}
         run: pnpm scrape:sync-supermix-prices

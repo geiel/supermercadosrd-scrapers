@@ -23,14 +23,15 @@ updated revisions afterward. Organizer and PriceRD are outside this transition.
 ## Supermix price sync
 
 `pnpm scrape:sync-supermix-prices` refreshes every Supermix price (`shopId=14`)
-through the Shopify Storefront API in batches of 250 products, with 3–5 s
-between requests. It runs in its own workflow every 6 hours and does not use
-the shared prices batch. `api` holds the Shopify Product GID (or a
-ProductVariant GID for multi-variant products); rows that only have a product
-URL get their GID resolved and saved on the next run.
-
-Required secrets in the `Production` environment:
-`SUPERMIX_STOREFRONT_API_URL` and `SUPERMIX_STOREFRONT_ACCESS_TOKEN`.
+through the public JSON API of Supermix's Vendabo storefront (Supermix left
+Shopify on 2026-10-07). It pages through the whole catalog, 100 products per
+request (~210 requests, 1.5–3 s apart), then looks up one by one only the
+visible rows missing from the listing (at most 300 per run). It runs in its own
+workflow every 6 hours and does not use the shared prices batch. `api` holds
+the Supermix product id; rows that only have a `/p/<slug>` URL get their id
+saved on the next run. Shopify-era `/products/<handle>` links are never matched
+by slug (many handles now point to another product): they are hidden until
+someone links them again. No secrets are needed.
 
 The run fails, so GitHub sends a notification, when a request fails, a product
 needs attention (for example `multiple_variants`), or a visible Supermix price
