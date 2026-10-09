@@ -28,7 +28,9 @@ Shopify on 2026-10-07). It pages through the whole catalog, 100 products per
 request (~210 requests, 1.5–3 s apart), then looks up one by one only the
 visible rows missing from the listing (at most 300 per run). It runs in its own
 workflow every 6 hours and does not use the shared prices batch. `api` holds
-the Supermix product id; rows that only have a `/p/<slug>` URL get their id
+the Supermix product id, or `<productId>:<variantId>` for a product that groups
+several variants (sizes, colors) with their own prices; each such product costs
+one extra request per run. Rows that only have a `/p/<slug>` URL get their id
 saved on the next run. Shopify-era `/products/<handle>` links are never matched
 by slug (many handles now point to another product): they are hidden until
 someone links them again. No secrets are needed.

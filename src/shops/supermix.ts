@@ -34,10 +34,13 @@ export function getSupermixApiConfig(): SupermixApiConfig {
   return { apiBaseUrl: `${SUPERMIX_ORIGIN}/api/storefront/v1` };
 }
 
-/** `api` holds the Supermix (Vendabo) product id. */
-export function parseSupermixProductId(api: string | null | undefined) {
-  const value = api?.trim();
-  return value && /^\d+$/.test(value) ? value : null;
+/**
+ * `api` holds the Supermix (Vendabo) product id, or `<productId>:<variantId>`
+ * when the product groups several variants (sizes, colors) with their own prices.
+ */
+export function parseSupermixReference(api: string | null | undefined) {
+  const match = api?.trim().match(/^(\d+)(?::(\d+))?$/);
+  return match ? { productId: match[1], variantId: match[2] ?? null } : null;
 }
 
 function parseSupermixPath(url: string | null | undefined) {
@@ -84,16 +87,48 @@ const productSchema = z.object({
   }),
 });
 
-export type SupermixProduct = z.infer<typeof productSchema>;
+const variantSchema = z.object({
+  id: z.number(),
+  in_stock: z.boolean(),
+  pricing: z.object({
+    price: moneySchema.nullable(),
+    original_price: moneySchema.nullable(),
+  }),
+});
+const productWithVariantsSchema = z.object({
+  slug: z.string(),
+  variants: z.array(variantSchema),
+});
 
 function toPositivePrice(amount: string | null | undefined) {
   const value = Number(amount);
   return amount && Number.isFinite(value) && value > 0 ? value.toFixed(2) : null;
 }
 
-export function toSupermixPriceResult(product: unknown): ScrapePriceResult {
+/**
+ * Price of a listing or detail product. With `variantId` the product must be a
+ * detail payload, and the price is that variant's own price.
+ */
+export function toSupermixPriceResult(
+  product: unknown,
+  variantId: string | null = null
+): ScrapePriceResult {
   if (product === null || product === undefined) {
     return notFound(shopId, "product_not_found", true);
+  }
+
+  if (variantId !== null) {
+    const parsed = productWithVariantsSchema.safeParse(product);
+    if (!parsed.success) {
+      return error(shopId, "invalid_payload", false, false);
+    }
+
+    const variant = parsed.data.variants.find((item) => String(item.id) === variantId);
+    if (!variant) {
+      return notFound(shopId, "variant_not_found", true);
+    }
+
+    return toPrice(parsed.data.slug, variant.in_stock, variant.pricing);
   }
 
   const parsed = productSchema.safeParse(product);
@@ -101,13 +136,19 @@ export function toSupermixPriceResult(product: unknown): ScrapePriceResult {
     return error(shopId, "invalid_payload", false, false);
   }
 
-  const { slug, in_stock: inStock, pricing } = parsed.data;
-
-  // "Desde RD$..." prices depend on a variant we do not track.
-  if (pricing.price_from) {
+  // "Desde RD$..." prices depend on a variant; such links must name it in `api`.
+  if (parsed.data.pricing.price_from) {
     return error(shopId, "multiple_variants", false, true);
   }
 
+  return toPrice(parsed.data.slug, parsed.data.in_stock, parsed.data.pricing);
+}
+
+function toPrice(
+  slug: string,
+  inStock: boolean,
+  pricing: { price: { amount: string } | null; original_price: { amount: string } | null }
+): ScrapePriceResult {
   if (!inStock) {
     return notFound(shopId, "unavailable", true);
   }
@@ -238,7 +279,8 @@ export async function scrapeSupermixPrice(
   input: ScrapePriceInput,
   requestConfig?: FetchWithRetryConfig
 ): Promise<ScrapePriceResult> {
-  const reference = parseSupermixProductId(input.api) ?? parseSupermixSlug(input.url);
+  const parsedReference = parseSupermixReference(input.api);
+  const reference = parsedReference?.productId ?? parseSupermixSlug(input.url);
   if (!reference) {
     return isLegacySupermixUrl(input.url)
       ? notFound(shopId, "legacy_shopify_link", true)
@@ -254,5 +296,5 @@ export async function scrapeSupermixPrice(
     return error(shopId, fetched.reason, true, false);
   }
 
-  return toSupermixPriceResult(fetched.product);
+  return toSupermixPriceResult(fetched.product, parsedReference?.variantId ?? null);
 }
