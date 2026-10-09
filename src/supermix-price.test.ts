@@ -4,57 +4,51 @@ import type { AddressInfo } from "node:net";
 import test from "node:test";
 
 import {
-  fetchSupermixNodes,
-  parseSupermixGid,
-  parseSupermixHandle,
-  resolveSupermixHandles,
+  fetchSupermixCatalogPage,
+  fetchSupermixProduct,
+  isLegacySupermixUrl,
+  parseSupermixProductId,
+  parseSupermixSlug,
   toSupermixPriceResult,
-  type SupermixStorefrontConfig,
+  type SupermixApiConfig,
 } from "./shops/supermix.js";
 
-function productNode(
-  variants: Array<{ price: string; compareAt?: string | null; available?: boolean }>,
-  handle = "capitan-crunch-11-7-oz"
+function product(
+  price: string | null,
+  {
+    originalPrice = null,
+    inStock = true,
+    priceFrom = false,
+    slug = "la-garza-arroz-10-lb",
+  }: {
+    originalPrice?: string | null;
+    inStock?: boolean;
+    priceFrom?: boolean;
+    slug?: string;
+  } = {}
 ) {
   return {
-    __typename: "Product",
-    id: "gid://shopify/Product/10210162114741",
-    handle,
-    variants: {
-      nodes: variants.map((variant, index) => ({
-        id: `gid://shopify/ProductVariant/5158382341343${index}`,
-        availableForSale: variant.available ?? true,
-        price: { amount: variant.price },
-        compareAtPrice:
-          variant.compareAt === undefined || variant.compareAt === null
-            ? null
-            : { amount: variant.compareAt },
-      })),
+    id: 830781,
+    slug,
+    title: "LA GARZA ARROZ 10 LB",
+    in_stock: inStock,
+    pricing: {
+      price: price === null ? null : { amount: price, formatted: `RD$ ${price}` },
+      original_price:
+        originalPrice === null ? null : { amount: originalPrice, formatted: `RD$ ${originalPrice}` },
+      price_from: priceFrom,
+      on_sale: originalPrice !== null,
+      promotion: null,
     },
   };
 }
 
-async function readBody(request: IncomingMessage) {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(chunk as Buffer);
-  }
-
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
-    query: string;
-    variables: Record<string, unknown>;
-  };
-}
-
-async function withStorefront(
-  handler: (
-    body: { query: string; variables: Record<string, unknown> },
-    request: IncomingMessage
-  ) => { status?: number; headers?: Record<string, string>; json: unknown },
-  run: (config: SupermixStorefrontConfig) => Promise<void>
+async function withApi(
+  handler: (request: IncomingMessage) => { status?: number; headers?: Record<string, string>; json: unknown },
+  run: (config: SupermixApiConfig) => Promise<void>
 ) {
-  const server = createServer(async (request, response) => {
-    const reply = handler(await readBody(request), request);
+  const server = createServer((request, response) => {
+    const reply = handler(request);
     response.writeHead(reply.status ?? 200, {
       "content-type": "application/json",
       ...reply.headers,
@@ -66,227 +60,149 @@ async function withStorefront(
   const { port } = server.address() as AddressInfo;
 
   try {
-    await run({
-      apiUrl: `http://127.0.0.1:${port}/api/2026-07/graphql.json`,
-      accessToken: "public-token",
-      retryDelayMs: 1,
-    });
+    await run({ apiBaseUrl: `http://127.0.0.1:${port}/api/storefront/v1`, retryDelayMs: 1 });
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
 }
 
-test("parses Supermix product and variant GIDs", () => {
-  assert.deepEqual(parseSupermixGid("gid://shopify/Product/10210162114741"), {
-    gid: "gid://shopify/Product/10210162114741",
-    type: "Product",
-    id: "10210162114741",
-  });
-  assert.equal(
-    parseSupermixGid(" gid://shopify/ProductVariant/51583823413429 ")?.type,
-    "ProductVariant"
-  );
-  assert.equal(parseSupermixGid("https://supermix.com.do/products/x.js"), null);
-  assert.equal(parseSupermixGid(null), null);
+test("accepts only numeric Supermix product ids", () => {
+  assert.equal(parseSupermixProductId(" 830781 "), "830781");
+  assert.equal(parseSupermixProductId("gid://shopify/Product/10210162114741"), null);
+  assert.equal(parseSupermixProductId(null), null);
 });
 
-test("extracts the handle only from Supermix product URLs", () => {
+test("extracts the slug only from current Supermix product URLs", () => {
   assert.equal(
-    parseSupermixHandle("https://supermix.com.do/products/Jaja-Petit-Pois-15-Oz?variant=1"),
-    "jaja-petit-pois-15-oz"
+    parseSupermixSlug("https://supermix.com.do/p/La-Garza-Arroz-10-LB?x=1"),
+    "la-garza-arroz-10-lb"
   );
-  assert.equal(
-    parseSupermixHandle("https://supermix.com.do/collections/alimentos/products/goya-15-oz/"),
-    "goya-15-oz"
-  );
-  assert.equal(parseSupermixHandle("https://jumbo.com.do/products/goya-15-oz"), null);
-  assert.equal(parseSupermixHandle("https://supermix.com.do/collections/alimentos"), null);
+  assert.equal(parseSupermixSlug("https://supermix.com.do/products/capitan-crunch-11-7-oz"), null);
+  assert.equal(parseSupermixSlug("https://supermix.com.do/t/arroz-fd2d12bf"), null);
+  assert.equal(parseSupermixSlug("https://example.com/p/la-garza-arroz-10-lb"), null);
+  assert.equal(parseSupermixSlug("not a url"), null);
 });
 
-test("uses the sale price as current price and compare-at as regular price", () => {
-  const result = toSupermixPriceResult(
-    productNode([{ price: "3611.65", compareAt: "4249.0" }], "tequila-1800-cristalino")
-  );
+test("recognizes Shopify-era product URLs as legacy links", () => {
+  assert.equal(isLegacySupermixUrl("https://supermix.com.do/products/capitan-crunch-11-7-oz"), true);
+  assert.equal(isLegacySupermixUrl("https://supermix.com.do/p/la-garza-arroz-10-lb"), false);
+  assert.equal(isLegacySupermixUrl("https://example.com/products/capitan-crunch"), false);
+});
+
+test("uses the sale price as current price and the original price as regular price", () => {
+  const result = toSupermixPriceResult(product("459.01", { originalPrice: "469.00" }));
 
   assert.equal(result.status, "ok");
-  assert.equal(result.shopId, 14);
-  assert.equal(result.shopName, "supermix");
-  if (result.status === "ok") {
-    assert.equal(result.currentPrice, "3611.65");
-    assert.equal(result.regularPrice, "4249.00");
-    assert.equal(
-      result.canonicalUrl,
-      "https://supermix.com.do/products/tequila-1800-cristalino"
-    );
+  assert.equal(result.status === "ok" && result.currentPrice, "459.01");
+  assert.equal(result.status === "ok" && result.regularPrice, "469.00");
+  assert.equal(
+    result.status === "ok" && result.canonicalUrl,
+    "https://supermix.com.do/p/la-garza-arroz-10-lb"
+  );
+});
+
+test("ignores original prices that are not higher than the price", () => {
+  const result = toSupermixPriceResult(product("90", { originalPrice: "90.00" }));
+
+  assert.equal(result.status === "ok" && result.currentPrice, "90.00");
+  assert.equal(result.status === "ok" && result.regularPrice, null);
+});
+
+test("hides removed, out-of-stock and unpriced products", () => {
+  for (const [input, reason] of [
+    [null, "product_not_found"],
+    [product("90", { inStock: false }), "unavailable"],
+    [product(null), "price_not_found"],
+    [product("0.00"), "price_not_found"],
+  ] as const) {
+    const result = toSupermixPriceResult(input);
+    assert.equal(result.status, "not_found");
+    assert.equal(result.status === "not_found" && result.reason, reason);
+    assert.equal(result.status === "not_found" && result.hide, true);
   }
 });
 
-test("ignores compare-at prices that are not higher than the price", () => {
-  for (const compareAt of [null, "245.0", "200.0"]) {
-    const result = toSupermixPriceResult(productNode([{ price: "245.0", compareAt }]));
-    assert.equal(result.status, "ok");
-    if (result.status === "ok") {
-      assert.equal(result.currentPrice, "245.00");
-      assert.equal(result.regularPrice, null);
-    }
-  }
-});
-
-test("hides deleted, unpublished and out-of-stock products", () => {
-  assert.deepEqual(toSupermixPriceResult(null), {
-    status: "not_found",
-    shopId: 14,
-    shopName: "supermix",
-    reason: "product_not_found",
-    hide: true,
-  });
-
-  const unavailable = toSupermixPriceResult(
-    productNode([{ price: "99.0", available: false }])
-  );
-  assert.equal(unavailable.status, "not_found");
-  assert.equal(unavailable.status === "not_found" && unavailable.hide, true);
-
-  const zeroPrice = toSupermixPriceResult(productNode([{ price: "0.0" }]));
-  assert.equal(zeroPrice.status === "not_found" && zeroPrice.reason, "price_not_found");
-});
-
-test("refuses to guess a price for multi-variant products", () => {
-  const result = toSupermixPriceResult(
-    productNode([{ price: "150.0" }, { price: "190.0" }])
-  );
+test("refuses to guess a price for products priced from several variants", () => {
+  const result = toSupermixPriceResult(product("100", { priceFrom: true }));
 
   assert.equal(result.status, "error");
-  if (result.status === "error") {
-    assert.equal(result.reason, "multiple_variants");
-    assert.equal(result.retryable, false);
-    assert.equal(result.hide, true);
-  }
-});
-
-test("prices a specific variant when api holds a variant GID", () => {
-  const result = toSupermixPriceResult({
-    __typename: "ProductVariant",
-    id: "gid://shopify/ProductVariant/51583823413429",
-    availableForSale: true,
-    price: { amount: "150.0" },
-    compareAtPrice: null,
-    product: { handle: "destornillador-de-estria" },
-  });
-
-  assert.equal(result.status, "ok");
-  if (result.status === "ok") {
-    assert.equal(
-      result.canonicalUrl,
-      "https://supermix.com.do/products/destornillador-de-estria?variant=51583823413429"
-    );
-  }
+  assert.equal(result.status === "error" && result.reason, "multiple_variants");
+  assert.equal(result.status === "error" && result.hide, true);
 });
 
 test("reports an unexpected payload without hiding the price", () => {
-  const result = toSupermixPriceResult({ __typename: "Collection", id: "x" });
-  assert.equal(result.status, "error");
+  const result = toSupermixPriceResult({ id: "830781", pricing: {} });
+
+  assert.equal(result.status === "error" && result.reason, "invalid_payload");
   assert.equal(result.status === "error" && result.hide, false);
 });
 
-test("fetches a batch of nodes in one request and keeps them aligned by GID", async () => {
-  const requests: Array<{ token: string | undefined; ids: unknown }> = [];
+test("pages the catalog oldest first, 100 products per request", async () => {
+  const urls: string[] = [];
 
-  await withStorefront(
-    (body, request) => {
-      requests.push({
-        token: request.headers["x-shopify-storefront-access-token"] as string | undefined,
-        ids: body.variables.ids,
-      });
-      const ids = body.variables.ids as string[];
-      return {
-        headers: { "x-shopify-api-version": "2026-07" },
-        json: {
-          data: {
-            nodes: ids.map((id) =>
-              id.endsWith("/1") ? null : { ...productNode([{ price: "95.0" }]), id }
-            ),
-          },
-        },
-      };
+  await withApi(
+    (request) => {
+      urls.push(request.url ?? "");
+      return { json: { products: [product("10")], pagination: { page: 3 } } };
     },
     async (config) => {
-      const gids = ["gid://shopify/Product/10", "gid://shopify/Product/1"];
-      const result = await fetchSupermixNodes(gids, config);
-
-      assert.equal(result.ok, true);
-      if (result.ok) {
-        assert.equal(result.apiVersion, "2026-07");
-        assert.equal(toSupermixPriceResult(result.nodesByGid.get(gids[0])).status, "ok");
-        assert.equal(result.nodesByGid.get(gids[1]), null);
-      }
+      const fetched = await fetchSupermixCatalogPage(3, config);
+      assert.equal(fetched.ok, true);
+      assert.equal(fetched.ok && fetched.products.length, 1);
     }
   );
 
-  assert.deepEqual(requests, [
-    {
-      token: "public-token",
-      ids: ["gid://shopify/Product/10", "gid://shopify/Product/1"],
-    },
+  assert.deepEqual(urls, [
+    "/api/storefront/v1/products?per_page=100&sort=created_at%3Aasc&page=3",
   ]);
+});
+
+test("treats a product 404 as gone, not as a request failure", async () => {
+  await withApi(
+    () => ({ status: 404, json: { error: "Not found" } }),
+    async (config) => {
+      assert.deepEqual(await fetchSupermixProduct("old-slug", config), {
+        ok: true,
+        product: null,
+      });
+    }
+  );
 });
 
 test("retries throttled requests and then succeeds", async () => {
   let calls = 0;
 
-  await withStorefront(
+  await withApi(
     () => {
       calls += 1;
       return calls === 1
-        ? { status: 429, json: { errors: "Throttled" } }
-        : { json: { data: { nodes: [null] } } };
+        ? { status: 429, json: {} }
+        : { json: product("10") };
     },
     async (config) => {
-      const result = await fetchSupermixNodes(["gid://shopify/Product/1"], config);
-      assert.equal(result.ok, true);
+      const fetched = await fetchSupermixProduct("830781", config);
+      assert.equal(fetched.ok, true);
     }
   );
 
   assert.equal(calls, 2);
 });
 
-test("does not retry authentication failures", async () => {
+test("does not retry forbidden requests", async () => {
   let calls = 0;
 
-  await withStorefront(
+  await withApi(
     () => {
       calls += 1;
-      return { status: 401, json: { errors: "Unauthorized" } };
+      return { status: 403, json: {} };
     },
     async (config) => {
-      const result = await fetchSupermixNodes(["gid://shopify/Product/1"], config);
-      assert.deepEqual(result, { ok: false, reason: "http_401" });
+      assert.deepEqual(await fetchSupermixCatalogPage(1, config), {
+        ok: false,
+        reason: "http_403",
+      });
     }
   );
 
   assert.equal(calls, 1);
-});
-
-test("resolves product handles to GIDs with one aliased query", async () => {
-  let receivedQuery = "";
-
-  await withStorefront(
-    (body) => {
-      receivedQuery = body.query;
-      assert.deepEqual(body.variables, { h0: "goya-15-oz", h1: "missing" });
-      return {
-        json: { data: { h0: { id: "gid://shopify/Product/42" }, h1: null } },
-      };
-    },
-    async (config) => {
-      const result = await resolveSupermixHandles(["goya-15-oz", "missing"], config);
-      assert.equal(result.ok, true);
-      if (result.ok) {
-        assert.equal(result.gidByHandle.get("goya-15-oz"), "gid://shopify/Product/42");
-        assert.equal(result.gidByHandle.get("missing"), null);
-      }
-    }
-  );
-
-  assert.match(receivedQuery, /h0: product\(handle: \$h0\)/);
 });

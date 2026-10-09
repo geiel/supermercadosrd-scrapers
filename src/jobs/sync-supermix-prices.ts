@@ -7,22 +7,27 @@ import { closeDb, db } from "../db/client.js";
 import { products, productsShopsPrices } from "../db/schema.js";
 import { error, notFound } from "../result.js";
 import {
-  SUPERMIX_HANDLES_BATCH_SIZE,
-  SUPERMIX_NODES_BATCH_SIZE,
   SUPERMIX_SHOP_ID,
-  fetchSupermixNodes,
-  getSupermixStorefrontConfig,
-  parseSupermixGid,
-  parseSupermixHandle,
-  resolveSupermixHandles,
+  fetchSupermixCatalogPage,
+  fetchSupermixProduct,
+  getSupermixApiConfig,
+  isLegacySupermixUrl,
+  parseSupermixProductId,
+  parseSupermixSlug,
   toSupermixPriceResult,
 } from "../shops/supermix.js";
 import type { ScrapePriceResult } from "../types.js";
 import { mapWithConcurrency, randomDelay } from "../utils.js";
 
-// Refreshes every Supermix price (visible and hidden) in a few batched
-// Storefront API requests. It runs on its own schedule and never touches the
-// shared prices batch, so other shops are unaffected.
+// Refreshes every Supermix price (visible and hidden) by paging through the
+// public catalog API (~210 requests), then looks up only the products missing
+// from the listing. It runs on its own schedule and never touches the shared
+// prices batch, so other shops are unaffected.
+
+// A real catalog has ~20k products; far fewer means the listing broke, and
+// rows missing from it must not be hidden on that evidence.
+const MIN_CATALOG_PRODUCTS = 5000;
+const MAX_CATALOG_PAGES = 1000;
 
 function parseArgs(argv: string[]) {
   const args = new Map<string, string>();
@@ -74,15 +79,6 @@ function parseOptionalIntegerArg(args: Map<string, string>, key: string) {
   return parsed;
 }
 
-function chunk<T>(items: T[], size: number) {
-  const chunks: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    chunks.push(items.slice(i, i + size));
-  }
-
-  return chunks;
-}
-
 const productIsActive = or(isNull(products.deleted), eq(products.deleted, false));
 
 async function loadSupermixRows(productId: number | null, limit: number | null) {
@@ -119,17 +115,27 @@ async function loadSupermixRows(productId: number | null, limit: number | null) 
   return (limit === null ? await query : await query.limit(limit)) as ShopPriceRow[];
 }
 
-async function persistProductGid(row: ShopPriceRow, gid: string) {
+async function persistProductId(row: ShopPriceRow, id: string) {
   await db
     .update(productsShopsPrices)
-    .set({ api: gid })
+    .set({ api: id })
     .where(
       and(
         eq(productsShopsPrices.productId, row.productId),
         eq(productsShopsPrices.shopId, SUPERMIX_SHOP_ID),
-        sql`${productsShopsPrices.api} IS DISTINCT FROM ${gid}`
+        sql`${productsShopsPrices.api} IS DISTINCT FROM ${id}`
       )
     );
+}
+
+function productIdOf(product: unknown) {
+  const id = (product as { id?: unknown } | null)?.id;
+  return typeof id === "number" ? String(id) : null;
+}
+
+function productSlugOf(product: unknown) {
+  const slug = (product as { slug?: unknown } | null)?.slug;
+  return typeof slug === "string" ? slug.toLowerCase() : null;
 }
 
 async function findStaleVisibleRows(maxAgeHours: number) {
@@ -169,15 +175,16 @@ function writeStepSummary(lines: string[]) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const dryRun = args.get("--dry-run") === "true";
-  const delayMinMs = parseNumberArg(args, "--delay-min", 3000);
-  const delayMaxMs = parseNumberArg(args, "--delay-max", 5000);
+  const delayMinMs = parseNumberArg(args, "--delay-min", 1500);
+  const delayMaxMs = parseNumberArg(args, "--delay-max", 3000);
   const maxAgeHours = parseNumberArg(args, "--max-age-hours", 12);
   const concurrency = parseNumberArg(args, "--concurrency", 4);
+  const maxLookups = parseNumberArg(args, "--max-lookups", 300);
   const targetProductId = parseOptionalIntegerArg(args, "--product-id");
   const limit = parseOptionalIntegerArg(args, "--limit");
   const partialRun = targetProductId !== null || limit !== null;
 
-  const config = getSupermixStorefrontConfig();
+  const config = getSupermixApiConfig();
   const rows = await loadSupermixRows(targetProductId, limit);
   console.log(
     `[INFO] supermix rows=${rows.length}${dryRun ? " (dry run: no database writes)" : ""}`
@@ -186,7 +193,6 @@ async function main() {
   const results = new Map<ShopPriceRow, ScrapePriceResult>();
   const requestFailures: string[] = [];
   let requestCount = 0;
-  const apiVersions = new Set<string>();
 
   async function paceRequest() {
     if (requestCount > 0) {
@@ -196,74 +202,101 @@ async function main() {
     requestCount += 1;
   }
 
-  const rowsByGid = new Map<string, ShopPriceRow[]>();
-  const rowsByHandle = new Map<string, ShopPriceRow[]>();
-  const addTo = (map: Map<string, ShopPriceRow[]>, key: string, row: ShopPriceRow) =>
-    map.set(key, [...(map.get(key) ?? []), row]);
-
+  const references = new Map<ShopPriceRow, { id: string | null; slug: string | null }>();
   for (const row of rows) {
-    const gid = parseSupermixGid(row.api)?.gid;
-    const handle = gid ? null : parseSupermixHandle(row.url);
-
-    if (gid) {
-      addTo(rowsByGid, gid, row);
-    } else if (handle) {
-      addTo(rowsByHandle, handle, row);
+    const reference = { id: parseSupermixProductId(row.api), slug: parseSupermixSlug(row.url) };
+    if (reference.id || reference.slug) {
+      references.set(row, reference);
+    } else if (isLegacySupermixUrl(row.url)) {
+      results.set(row, notFound(SUPERMIX_SHOP_ID, "legacy_shopify_link", true));
     } else {
       results.set(row, error(SUPERMIX_SHOP_ID, "missing_product_reference", false, false));
     }
   }
 
-  // Rows added with only a product URL: resolve the handle once and keep the GID.
-  for (const handles of chunk([...rowsByHandle.keys()], SUPERMIX_HANDLES_BATCH_SIZE)) {
-    await paceRequest();
-    const resolved = await resolveSupermixHandles(handles, config);
+  const productsById = new Map<string, unknown>();
+  const productsBySlug = new Map<string, unknown>();
+  let catalogComplete = false;
+  let catalogPages = 0;
 
-    for (const handle of handles) {
-      for (const row of rowsByHandle.get(handle) ?? []) {
-        if (!resolved.ok) {
-          results.set(row, error(SUPERMIX_SHOP_ID, resolved.reason, true, false));
-          continue;
-        }
-
-        const gid = resolved.gidByHandle.get(handle);
-        if (!gid) {
-          results.set(row, notFound(SUPERMIX_SHOP_ID, "product_not_found", true));
-          continue;
-        }
-
-        if (!dryRun) {
-          await persistProductGid(row, gid);
-        }
-        row.api = gid;
-        addTo(rowsByGid, gid, row);
+  // A one-product run looks the product up directly instead of paging the catalog.
+  if (targetProductId === null) {
+    for (let page = 1; page <= MAX_CATALOG_PAGES; page += 1) {
+      await paceRequest();
+      const fetched = await fetchSupermixCatalogPage(page, config);
+      if (!fetched.ok) {
+        requestFailures.push(`catalog_page_${page}:${fetched.reason}`);
+        break;
       }
-    }
 
-    if (!resolved.ok) {
-      requestFailures.push(resolved.reason);
+      catalogPages = page;
+      if (fetched.products.length === 0) {
+        catalogComplete = productsById.size >= MIN_CATALOG_PRODUCTS;
+        if (!catalogComplete) {
+          requestFailures.push(`catalog_too_small:${productsById.size}`);
+        }
+        break;
+      }
+
+      for (const product of fetched.products) {
+        const id = productIdOf(product);
+        const slug = productSlugOf(product);
+        if (id) productsById.set(id, product);
+        if (slug) productsBySlug.set(slug, product);
+      }
     }
   }
 
-  for (const gids of chunk([...rowsByGid.keys()], SUPERMIX_NODES_BATCH_SIZE)) {
-    await paceRequest();
-    const fetched = await fetchSupermixNodes(gids, config);
+  const missing: ShopPriceRow[] = [];
+  for (const [row, { id, slug }] of references) {
+    // Once a row has a product id, a slug match could be a different product.
+    const product = id ? productsById.get(id) : productsBySlug.get(slug!);
+    if (product) {
+      results.set(row, toSupermixPriceResult(product));
+      const productId = productIdOf(product);
+      if (productId && productId !== row.api) {
+        if (!dryRun) {
+          await persistProductId(row, productId);
+        }
+        row.api = productId;
+      }
+    } else {
+      missing.push(row);
+    }
+  }
 
-    if (!fetched.ok) {
-      requestFailures.push(fetched.reason);
-    } else if (fetched.apiVersion) {
-      apiVersions.add(fetched.apiVersion);
+  // Products that left the listing (or moved between pages mid-run) are looked
+  // up one by one, so a visible price is hidden only when Supermix says the
+  // product is gone. Rows already hidden stay hidden without a request.
+  let lookups = 0;
+  for (const row of missing) {
+    if (catalogComplete && row.hidden) {
+      results.set(row, toSupermixPriceResult(null));
+      continue;
     }
 
-    for (const gid of gids) {
-      for (const row of rowsByGid.get(gid) ?? []) {
-        results.set(
-          row,
-          fetched.ok
-            ? toSupermixPriceResult(fetched.nodesByGid.get(gid))
-            : error(SUPERMIX_SHOP_ID, fetched.reason, true, false)
-        );
+    if (lookups >= maxLookups) {
+      results.set(row, error(SUPERMIX_SHOP_ID, "lookup_limit_reached", true, false));
+      continue;
+    }
+
+    const { id, slug } = references.get(row)!;
+    lookups += 1;
+    await paceRequest();
+    const fetched = await fetchSupermixProduct((id ?? slug)!, config);
+    if (!fetched.ok) {
+      requestFailures.push(fetched.reason);
+      results.set(row, error(SUPERMIX_SHOP_ID, fetched.reason, true, false));
+      continue;
+    }
+
+    results.set(row, toSupermixPriceResult(fetched.product));
+    const productId = productIdOf(fetched.product);
+    if (productId && productId !== row.api) {
+      if (!dryRun) {
+        await persistProductId(row, productId);
       }
+      row.api = productId;
     }
   }
 
@@ -283,7 +316,11 @@ async function main() {
       );
     }
   } else {
-    await mapWithConcurrency([...results.entries()], concurrency, ([row, result]) =>
+    // Hiding an already hidden price changes nothing but would revalidate the page.
+    const changes = [...results.entries()].filter(
+      ([row, result]) => !(row.hidden && result.status !== "ok" && result.hide)
+    );
+    await mapWithConcurrency(changes, concurrency, ([row, result]) =>
       applyScrapeResult(row, result)
     );
   }
@@ -295,7 +332,7 @@ async function main() {
     "### Supermix price sync",
     "",
     `- Rows: ${rows.length}`,
-    `- Storefront requests: ${requestCount}${apiVersions.size ? ` (API ${[...apiVersions].join(", ")})` : ""}`,
+    `- Requests: ${requestCount} (${catalogPages} catalog pages, ${productsById.size} catalog products, ${lookups} lookups)`,
     `- Request failures: ${requestFailures.length}${requestFailures.length ? ` (${requestFailures.join(", ")})` : ""}`,
     ...[...outcomeCounts.entries()]
       .sort((a, b) => b[1] - a[1])
