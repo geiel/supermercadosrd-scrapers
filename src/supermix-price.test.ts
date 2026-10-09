@@ -7,7 +7,7 @@ import {
   fetchSupermixCatalogPage,
   fetchSupermixProduct,
   isLegacySupermixUrl,
-  parseSupermixProductId,
+  parseSupermixReference,
   parseSupermixSlug,
   toSupermixPriceResult,
   type SupermixApiConfig,
@@ -66,10 +66,57 @@ async function withApi(
   }
 }
 
-test("accepts only numeric Supermix product ids", () => {
-  assert.equal(parseSupermixProductId(" 830781 "), "830781");
-  assert.equal(parseSupermixProductId("gid://shopify/Product/10210162114741"), null);
-  assert.equal(parseSupermixProductId(null), null);
+test("parses Supermix product and variant references", () => {
+  assert.deepEqual(parseSupermixReference(" 830781 "), { productId: "830781", variantId: null });
+  assert.deepEqual(parseSupermixReference("860172:1421238"), {
+    productId: "860172",
+    variantId: "1421238",
+  });
+  assert.equal(parseSupermixReference("gid://shopify/Product/10210162114741"), null);
+  assert.equal(parseSupermixReference(null), null);
+});
+
+function variantProduct() {
+  const variant = (id: number, price: string, inStock = true, originalPrice: string | null = null) => ({
+    id,
+    sku: `T${id}`,
+    is_master: false,
+    in_stock: inStock,
+    pricing: {
+      price: { amount: price },
+      original_price: originalPrice === null ? null : { amount: originalPrice },
+    },
+  });
+
+  return {
+    ...product("70", { priceFrom: true, slug: "tee-de-cobre-sencilla-1-2-foset" }),
+    variants: [
+      variant(1421237, "70.00", false),
+      variant(1421238, "65.00", true, "70.00"),
+      variant(1421239, "159.00", false),
+    ],
+  };
+}
+
+test("prices the linked variant of a product with several variants", () => {
+  const result = toSupermixPriceResult(variantProduct(), "1421238");
+
+  assert.equal(result.status === "ok" && result.currentPrice, "65.00");
+  assert.equal(result.status === "ok" && result.regularPrice, "70.00");
+  assert.equal(
+    result.status === "ok" && result.canonicalUrl,
+    "https://supermix.com.do/p/tee-de-cobre-sencilla-1-2-foset"
+  );
+});
+
+test("hides a linked variant that is out of stock or gone", () => {
+  for (const [variantId, reason] of [
+    ["1421239", "unavailable"],
+    ["999", "variant_not_found"],
+  ] as const) {
+    const result = toSupermixPriceResult(variantProduct(), variantId);
+    assert.equal(result.status === "not_found" && result.reason, reason);
+  }
 });
 
 test("extracts the slug only from current Supermix product URLs", () => {

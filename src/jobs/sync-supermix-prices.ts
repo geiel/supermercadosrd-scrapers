@@ -12,7 +12,7 @@ import {
   fetchSupermixProduct,
   getSupermixApiConfig,
   isLegacySupermixUrl,
-  parseSupermixProductId,
+  parseSupermixReference,
   parseSupermixSlug,
   toSupermixPriceResult,
 } from "../shops/supermix.js";
@@ -202,9 +202,15 @@ async function main() {
     requestCount += 1;
   }
 
-  const references = new Map<ShopPriceRow, { id: string | null; slug: string | null }>();
+  type Reference = { id: string | null; variantId: string | null; slug: string | null };
+  const references = new Map<ShopPriceRow, Reference>();
   for (const row of rows) {
-    const reference = { id: parseSupermixProductId(row.api), slug: parseSupermixSlug(row.url) };
+    const parsed = parseSupermixReference(row.api);
+    const reference = {
+      id: parsed?.productId ?? null,
+      variantId: parsed?.variantId ?? null,
+      slug: parseSupermixSlug(row.url),
+    };
     if (reference.id || reference.slug) {
       references.set(row, reference);
     } else if (isLegacySupermixUrl(row.url)) {
@@ -244,6 +250,38 @@ async function main() {
         if (id) productsById.set(id, product);
         if (slug) productsBySlug.set(slug, product);
       }
+    }
+  }
+
+  // The listing only shows a "desde" price for products with variants, so each
+  // such product is fetched once and every linked variant is priced from it.
+  const variantRows = new Map<string, ShopPriceRow[]>();
+  for (const [row, { id, variantId }] of references) {
+    if (id && variantId) {
+      variantRows.set(id, [...(variantRows.get(id) ?? []), row]);
+      references.delete(row);
+    }
+  }
+
+  let variantLookups = 0;
+  for (const [id, linkedRows] of variantRows) {
+    let product: unknown = null;
+    if (!catalogComplete || productsById.has(id)) {
+      variantLookups += 1;
+      await paceRequest();
+      const fetched = await fetchSupermixProduct(id, config);
+      if (!fetched.ok) {
+        requestFailures.push(fetched.reason);
+        for (const row of linkedRows) {
+          results.set(row, error(SUPERMIX_SHOP_ID, fetched.reason, true, false));
+        }
+        continue;
+      }
+      product = fetched.product;
+    }
+
+    for (const row of linkedRows) {
+      results.set(row, toSupermixPriceResult(product, parseSupermixReference(row.api)!.variantId));
     }
   }
 
@@ -332,7 +370,7 @@ async function main() {
     "### Supermix price sync",
     "",
     `- Rows: ${rows.length}`,
-    `- Requests: ${requestCount} (${catalogPages} catalog pages, ${productsById.size} catalog products, ${lookups} lookups)`,
+    `- Requests: ${requestCount} (${catalogPages} catalog pages, ${productsById.size} catalog products, ${variantLookups} variant products, ${lookups} lookups)`,
     `- Request failures: ${requestFailures.length}${requestFailures.length ? ` (${requestFailures.join(", ")})` : ""}`,
     ...[...outcomeCounts.entries()]
       .sort((a, b) => b[1] - a[1])
