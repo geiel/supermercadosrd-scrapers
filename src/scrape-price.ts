@@ -9,6 +9,7 @@ import {
   scrapePricesmartPrice,
   scrapeSirenaPrice,
   scrapeSupermixPrice,
+  scrapeOlePrice,
 } from "./shops/index.js";
 import type {
   FetchWithRetryConfig,
@@ -41,5 +42,7 @@ export async function scrapePrice(
       return scrapeCarrefourPrice(input, requestConfig);
     case 14:
       return scrapeSupermixPrice(input, requestConfig);
+    case 15:
+      return scrapeOlePrice(input, requestConfig);
   }
 }
