@@ -51,5 +51,12 @@ export async function scrapeProductImages(
         shopName: "supermix",
         reason: "image_scraper_not_supported",
       };
+    case 15:
+      return {
+        status: "not_found",
+        shopId: 15,
+        shopName: "ole",
+        reason: "image_scraper_not_supported",
+      };
   }
 }

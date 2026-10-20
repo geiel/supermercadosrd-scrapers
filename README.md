@@ -39,3 +39,30 @@ The run fails, so GitHub sends a notification, when a request fails, a product
 needs attention (for example `multiple_variants`), or a visible Supermix price
 is older than 12 hours. Use `--dry-run` to fetch prices without writing, and
 `--product-id` or `--limit` for partial runs.
+
+## Olé price sync
+
+`pnpm scrape:sync-ole-prices` refreshes every Hipermercados Olé price
+(`shopId=15`) through the catalog API behind Olé's app "Ole en Casa"
+(nopCommerce Web API Frontend at `ecommerce.hiperole.com.do/api-frontend`;
+Olé agreed to it on 2026-10-19). The catalog endpoints need no token. It pages
+through the 33 root categories with the largest page size each category offers
+(75, or 9 in "Nuestras Marcas" and the cookie categories), about 170 requests
+1–1.5 s apart, then looks up one by one only the rows missing from the listing
+(at most 300 per run). It runs in its own workflow every 6 hours and does not
+use the shared prices batch. `api` holds the Olé product id. No secrets are
+needed.
+
+`price_value` is the current price and a higher `old_price_value` the regular
+price. Products with `disable_buy_button` cannot be ordered (Olé does not
+manage stock, so `in_stock` is always true) and are hidden. Products sold by
+the pound ("Chuleta Ahumada Lb") get measure purchase terms in pounds from the
+product details (the quantities the app lets a shopper pick); this costs one
+extra request the first time such a link is priced. If the listing comes back
+with fewer than 5,000 products (5,920 on 2026-10-19), rows missing from it are
+looked up instead of hidden, and the run fails.
+
+The run fails, so GitHub sends a notification, when a request fails, a product
+needs attention, or a visible Olé price is older than 12 hours. Use
+`--dry-run` to fetch prices without writing, and `--product-id` or `--limit`
+for partial runs.

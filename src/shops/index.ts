@@ -8,3 +8,4 @@ export { scrapeBravoPrice } from "./bravo.js";
 export { scrapeGarridoPrice } from "./garrido.js";
 export { scrapeCarrefourPrice } from "./carrefour.js";
 export { scrapeSupermixPrice } from "./supermix.js";
+export { scrapeOlePrice } from "./ole.js";
