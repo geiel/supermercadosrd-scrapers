@@ -8,7 +8,6 @@ import { products, productsShopsPrices } from "../db/schema.js";
 import { error, notFound } from "../result.js";
 import {
   SUPERMIX_SHOP_ID,
-  fetchSupermixCatalogPage,
   fetchSupermixProduct,
   getSupermixApiConfig,
   isLegacySupermixUrl,
@@ -18,16 +17,12 @@ import {
 } from "../shops/supermix.js";
 import type { ScrapePriceResult } from "../types.js";
 import { mapWithConcurrency, randomDelay } from "../utils.js";
+import { loadSupermixCatalog, loadSupermixVariants } from "../supermix-sync.js";
 
 // Refreshes every Supermix price (visible and hidden) by paging through the
 // public catalog API (~210 requests), then looks up only the products missing
 // from the listing. It runs on its own schedule and never touches the shared
 // prices batch, so other shops are unaffected.
-
-// A real catalog has ~20k products; far fewer means the listing broke, and
-// rows missing from it must not be hidden on that evidence.
-const MIN_CATALOG_PRODUCTS = 5000;
-const MAX_CATALOG_PAGES = 1000;
 
 function parseArgs(argv: string[]) {
   const args = new Map<string, string>();
@@ -133,11 +128,6 @@ function productIdOf(product: unknown) {
   return typeof id === "number" ? String(id) : null;
 }
 
-function productSlugOf(product: unknown) {
-  const slug = (product as { slug?: unknown } | null)?.slug;
-  return typeof slug === "string" ? slug.toLowerCase() : null;
-}
-
 async function findStaleVisibleRows(maxAgeHours: number) {
   return db
     .select({
@@ -220,37 +210,19 @@ async function main() {
     }
   }
 
-  const productsById = new Map<string, unknown>();
-  const productsBySlug = new Map<string, unknown>();
+  let productsById = new Map<string, unknown>();
+  let productsBySlug = new Map<string, unknown>();
   let catalogComplete = false;
   let catalogPages = 0;
 
   // A one-product run looks the product up directly instead of paging the catalog.
   if (targetProductId === null) {
-    for (let page = 1; page <= MAX_CATALOG_PAGES; page += 1) {
-      await paceRequest();
-      const fetched = await fetchSupermixCatalogPage(page, config);
-      if (!fetched.ok) {
-        requestFailures.push(`catalog_page_${page}:${fetched.reason}`);
-        break;
-      }
-
-      catalogPages = page;
-      if (fetched.products.length === 0) {
-        catalogComplete = productsById.size >= MIN_CATALOG_PRODUCTS;
-        if (!catalogComplete) {
-          requestFailures.push(`catalog_too_small:${productsById.size}`);
-        }
-        break;
-      }
-
-      for (const product of fetched.products) {
-        const id = productIdOf(product);
-        const slug = productSlugOf(product);
-        if (id) productsById.set(id, product);
-        if (slug) productsBySlug.set(slug, product);
-      }
-    }
+    const catalog = await loadSupermixCatalog(config, paceRequest);
+    productsById = catalog.productsById;
+    productsBySlug = catalog.productsBySlug;
+    catalogPages = catalog.pages;
+    catalogComplete = true;
+    console.log(`[INFO] supermix catalog pages=${catalogPages} uniqueProducts=${productsById.size}`);
   }
 
   // The listing only shows a "desde" price for products with variants, so each
@@ -263,25 +235,20 @@ async function main() {
     }
   }
 
-  let variantLookups = 0;
-  for (const [id, linkedRows] of variantRows) {
-    let product: unknown = null;
-    if (!catalogComplete || productsById.has(id)) {
-      variantLookups += 1;
-      await paceRequest();
-      const fetched = await fetchSupermixProduct(id, config);
-      if (!fetched.ok) {
-        requestFailures.push(fetched.reason);
-        for (const row of linkedRows) {
-          results.set(row, error(SUPERMIX_SHOP_ID, fetched.reason, true, false));
-        }
-        continue;
-      }
-      product = fetched.product;
-    }
-
+  const variants = await loadSupermixVariants(
+    new Map([...variantRows].map(([id, linkedRows]) => [
+      id,
+      new Set(linkedRows.map((row) => parseSupermixReference(row.api)!.variantId!)),
+    ])),
+    config,
+    paceRequest
+  );
+  const variantLookups = variants.requests;
+  requestFailures.push(...variants.requestFailures);
+  for (const linkedRows of variantRows.values()) {
     for (const row of linkedRows) {
-      results.set(row, toSupermixPriceResult(product, parseSupermixReference(row.api)!.variantId));
+      const reference = parseSupermixReference(row.api)!;
+      results.set(row, variants.results.get(`${reference.productId}:${reference.variantId}`)!);
     }
   }
 

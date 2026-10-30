@@ -242,7 +242,7 @@ export async function fetchSupermixCatalogPage(
 ): Promise<{ ok: true; products: unknown[] } | { ok: false; reason: string }> {
   const params = new URLSearchParams({
     per_page: String(SUPERMIX_CATALOG_PAGE_SIZE),
-    sort: "created_at:asc",
+    sort_order: "created_at:asc",
     page: String(page),
   });
   const response = await getJson(`${config.apiBaseUrl}/products?${params}`, config);
@@ -253,6 +253,11 @@ export async function fetchSupermixCatalogPage(
   const products = (response.body as { products?: unknown } | null)?.products;
   if (response.status !== 200 || !Array.isArray(products)) {
     return { ok: false, reason: "invalid_catalog_payload" };
+  }
+
+  const sort = (response.body as { sort?: { current?: unknown } } | null)?.sort;
+  if (sort?.current !== "created_at:asc") {
+    return { ok: false, reason: "catalog_sort_not_applied" };
   }
 
   return { ok: true, products };
