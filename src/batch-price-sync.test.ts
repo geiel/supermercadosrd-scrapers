@@ -252,28 +252,27 @@ test("picks the first listed SKU candidate and skips malformed items", () => {
   assert.equal(matches.has(absent), false);
 });
 
-test("prices Nacional GraphQL items with the REST special-price rule", () => {
-  const now = new Date("2026-10-31T12:00:00");
-  const item = (special: number | null, from: string | null, to: string | null) => ({
+test("prices Nacional GraphQL items from the store's own final price", () => {
+  const item = (final: number | null, regular: number | null) => ({
     sku: "2010123",
-    special_price: special,
-    special_from_date: from,
-    special_to_date: to,
-    price_range: { minimum_price: { regular_price: { value: 120 } } },
+    price_range: {
+      minimum_price: { final_price: { value: final }, regular_price: { value: regular } },
+    },
   });
 
-  const active = toNacionalGraphqlPriceResult(item(99.5, "2026-10-01 00:00:00", "2026-11-30 23:59:59"), now);
-  assert.equal(active.status === "ok" && active.currentPrice, "99.5");
-  assert.equal(active.status === "ok" && active.regularPrice, "120");
+  // Nacional still charging an offer whose special_to_date has passed.
+  const offer = toNacionalGraphqlPriceResult(item(89.95, 99.95));
+  assert.equal(offer.status === "ok" && offer.currentPrice, "89.95");
+  assert.equal(offer.status === "ok" && offer.regularPrice, "99.95");
 
-  const expired = toNacionalGraphqlPriceResult(item(99.5, "2026-09-01 00:00:00", "2026-09-30 23:59:59"), now);
-  assert.equal(expired.status === "ok" && expired.currentPrice, "120");
-  assert.equal(expired.status === "ok" && expired.regularPrice, null);
+  const regular = toNacionalGraphqlPriceResult(item(120, 120));
+  assert.equal(regular.status === "ok" && regular.currentPrice, "120");
+  assert.equal(regular.status === "ok" && regular.regularPrice, null);
 
-  const higher = toNacionalGraphqlPriceResult(item(130, null, null), now);
-  assert.equal(higher.status === "ok" && higher.currentPrice, "120");
+  const zero = toNacionalGraphqlPriceResult(item(0, 120));
+  assert.equal(zero.status === "ok" && zero.currentPrice, "120");
 
-  const noPrice = toNacionalGraphqlPriceResult({ sku: "1", price_range: null }, now);
+  const noPrice = toNacionalGraphqlPriceResult({ sku: "1", price_range: null });
   assert.equal(noPrice.status === "error" && noPrice.reason, "price_not_found");
 });
 
