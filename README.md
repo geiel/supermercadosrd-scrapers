@@ -72,8 +72,9 @@ for partial runs.
 `pnpm scrape:sync-batch-prices` refreshes every Sirena (`shopId=1`), Nacional
 (2), Jumbo (3) and Merca Jumbo (7) price with batched lookups: one request
 prices up to 50 products, where the per-product batch spent one request per
-row. It runs every 2 hours from a GitHub schedule, its only automatic trigger
-(dispatching it from outside as well would run it twice).
+row. It runs every 2 hours, dispatched by the Supabase cron job "Refresh Batch
+Prices" (`net.http_post` to the workflow's dispatches endpoint), like the other
+scrapers.
 
 - Sirena: VTEX search with repeated `fq` filters. A slug API
   (`.../search/linda-habichuela-blanca-15-oz-1027594/p`) is looked up by

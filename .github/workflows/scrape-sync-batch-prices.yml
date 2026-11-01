@@ -1,11 +1,9 @@
 name: scrape-sync-batch-prices
 
 on:
+  # Dispatched every 2 hours by the Supabase cron ("Refresh Batch Prices"),
+  # like the other scrapers.
   workflow_dispatch:
-  schedule:
-    # Every 2 hours at minute 17 UTC. This schedule is the only automatic
-    # trigger: dispatching it from outside as well would run it twice.
-    - cron: "17 */2 * * *"
 
 concurrency:
   group: scrape-sync-batch-prices
