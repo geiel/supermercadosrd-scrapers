@@ -78,6 +78,25 @@ test("extracts exact Magento purchase terms from GraphQL", () => {
   assert.equal(terms?.mode, "measure");
 });
 
+test("reads peso_variable asked for directly like the custom attribute", () => {
+  for (const [direct, attribute] of [
+    [1, "1"],
+    [0, "0"],
+  ] as const) {
+    const fields = { label_peso_variable: "lb", min_qty: 0.25, qty_increments: 0.25 };
+    const fromDirect = extractMagentoGraphqlPurchaseTerms(
+      { ...fields, peso_variable: direct },
+      { source: "fixture_graphql" }
+    );
+    const fromAttribute = extractMagentoGraphqlPurchaseTerms(
+      { ...fields, custom_attributesV2: { items: [{ code: "peso_variable", value: attribute }] } },
+      { source: "fixture_graphql" }
+    );
+
+    assert.deepEqual(fromDirect, fromAttribute);
+  }
+});
+
 test("confirms standard Magento sale only from an explicit GraphQL flag", () => {
   const terms = extractMagentoGraphqlPurchaseTerms(
     {

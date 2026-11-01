@@ -66,3 +66,68 @@ The run fails, so GitHub sends a notification, when a request fails, a product
 needs attention, or a visible Olé price is older than 12 hours. Use
 `--dry-run` to fetch prices without writing, and `--product-id` or `--limit`
 for partial runs.
+
+## Batch price sync
+
+`pnpm scrape:sync-batch-prices` refreshes every Sirena (`shopId=1`), Nacional
+(2), Jumbo (3) and Merca Jumbo (7) price with batched lookups: one request
+prices up to 50 products, where the per-product batch spent one request per
+row. It runs every 2 hours, dispatched by the Supabase cron job "Refresh Batch
+Prices" (`net.http_post` to the workflow's dispatches endpoint), like the other
+scrapers.
+
+- Sirena: VTEX search with repeated `fq` filters. A slug API
+  (`.../search/linda-habichuela-blanca-15-oz-1027594/p`) is looked up by
+  `alternateIds_RefId` (the digits that end the slug), and the product only
+  counts when its `linkText` is that slug. An `fq=productId:<id>` API is looked
+  up by product id. Rows on the old `st.sirena.do` API, or on an EAN API, stay
+  in the per-product batch.
+- Nacional: GraphQL (store `default`) with the same special-price rule as the
+  REST lookup (`special_price` while `special_from_date`/`special_to_date`
+  allow it). GraphQL only lists products enabled on the Nacional website, so a
+  SKU it leaves out is looked up through REST, which decides whether to hide.
+- Jumbo and Merca Jumbo: GraphQL `products(filter: { sku: { in: [...] } })`
+  with the fields of the single lookup. Jumbo's SKU candidates (the `998`
+  prefix) are tried in the same order.
+
+Both Magento lookups, single and batched, ask for `peso_variable` directly.
+Through `custom_attributesV2` Magento answered "Internal server error" for
+many products (checked on 2026-10-31, one product or fifty), so the purchase
+terms were worked out without the flag; on a batch of 50 that field also took
+~7 s instead of ~1 s. With the flag, a 25 lb sack of chestnuts is one unit and
+not "minimum 25", and a bag of carrots is a unit and not sold by the pound.
+
+A dry run on 2026-10-31 priced 44,834 rows with 898 batch requests and 55
+single lookups in about 35 minutes; the per-product batch and the deals job
+had been sending ~64,000 requests a day for these shops.
+
+Nacional, Merca Jumbo and Jumbo share one Magento backend, so they share one
+queue; Sirena has its own. Each queue sends one request at a time, 1–1.5 s
+apart, and stops asking a backend for the rest of the run after an HTTP 403,
+429 or 503 (after retries) or three failures in a row.
+
+Visible rows are priced on every run, oldest first. A visible row a good
+response leaves out is looked up with the single scraper (at most 300 per shop
+and run), so a price is hidden on the same evidence as before. A request that
+fails for another reason (VTEX answers the odd HTTP 500) is retried once at
+the end of its shop. Rows without a SKU in their URL get the single scraper's
+error without a request. Hidden rows are
+rechecked once a day; one that is still unavailable only gets `updateAt`
+moved, without a page revalidation.
+
+The rows this job owns (`batchPriceRowCondition` in `src/batch-price-sync.ts`)
+are skipped by the routine per-product batch and by the deals job. A
+per-product run for `--product-id` or `--shop-id` still prices any row.
+
+The run fails, so GitHub sends a notification, when a request fails, the
+lookup limit is reached, a backend is stopped, or a visible price is older than
+6 hours. Use `--dry-run` to fetch prices without writing (`--report <file>`
+writes one JSON line per row), and `--shop-id`, `--product-id` or `--limit`
+(rows per shop) for partial runs.
+
+## Per-product prices batch
+
+`pnpm scrape:prices-batch` prices the remaining shops one product at a time,
+every hour, at most 400 rows per shop and run (80 iterations of 5). A row that
+fails without being hidden keeps its `updateAt`, so it is skipped for the rest
+of the run instead of coming back first in every iteration.

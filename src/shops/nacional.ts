@@ -1,4 +1,5 @@
 import * as cheerio from "cheerio";
+import { z } from "zod";
 import { NACIONAL_REST_API_URL } from "../api-endpoints.js";
 import {
   fetchWithRetryDetailed,
@@ -12,6 +13,7 @@ import type {
   ScrapePriceInput,
   ScrapePriceResult,
 } from "../types.js";
+import { fetchMagentoGraphqlItemsBySku } from "./magento-graphql-batch.js";
 
 const shopId = 2;
 const NACIONAL_HOST = "supermercadosnacional.com";
@@ -198,11 +200,12 @@ function isNacionalWebsiteProduct(
 }
 
 function isSpecialPriceActive(
-  product: NonNullable<NacionalProductLookupResponse["items"]>[number],
+  specialFromDate: unknown,
+  specialToDate: unknown,
   now = new Date()
 ): boolean {
-  const fromDate = parseMagentoDate(getAttributeValue(product, "special_from_date"));
-  const toDate = parseMagentoDate(getAttributeValue(product, "special_to_date"));
+  const fromDate = parseMagentoDate(specialFromDate);
+  const toDate = parseMagentoDate(specialToDate);
 
   if (fromDate && now < fromDate) {
     return false;
@@ -213,6 +216,38 @@ function isSpecialPriceActive(
   }
 
   return true;
+}
+
+export type NacionalPriceFields = {
+  price: unknown;
+  specialPrice: unknown;
+  specialFromDate: unknown;
+  specialToDate: unknown;
+};
+
+// The REST lookup and the batched GraphQL sync read the same Magento fields
+// and price them with this one rule.
+export function toNacionalPriceResult(
+  fields: NacionalPriceFields,
+  now = new Date()
+): ScrapePriceResult {
+  const regularPrice = parsePrice(fields.price);
+  const specialPrice = parsePrice(fields.specialPrice);
+
+  if (regularPrice === null) {
+    return error(shopId, "price_not_found", false, false);
+  }
+
+  if (
+    specialPrice !== null &&
+    specialPrice > 0 &&
+    specialPrice < regularPrice &&
+    isSpecialPriceActive(fields.specialFromDate, fields.specialToDate, now)
+  ) {
+    return ok(shopId, specialPrice.toString(), regularPrice.toString());
+  }
+
+  return ok(shopId, regularPrice.toString(), null);
 }
 
 export async function scrapeNacionalPrice(
@@ -266,21 +301,89 @@ export async function scrapeNacionalPrice(
     return notFound(shopId, "product_not_found", true);
   }
 
-  const regularPrice = parsePrice(product.price);
-  const specialPrice = parsePrice(getAttributeValue(product, "special_price"));
+  return toNacionalPriceResult({
+    price: product.price,
+    specialPrice: getAttributeValue(product, "special_price"),
+    specialFromDate: getAttributeValue(product, "special_from_date"),
+    specialToDate: getAttributeValue(product, "special_to_date"),
+  });
+}
 
-  if (regularPrice === null) {
-    return error(shopId, "price_not_found", false, false);
+const NACIONAL_GRAPHQL_URL = "https://supermercadosnacional.com/graphql";
+const NACIONAL_GRAPHQL_STORE_CODE = "default";
+
+// GraphQL only lists products that are enabled on the Nacional website, which
+// the REST lookup checks through status and website_ids. A SKU it leaves out
+// is looked up through REST, which decides whether to hide the price.
+const nacionalPricesBySkuQuery = `query NacionalPricesBySku($skus: [String!]!, $pageSize: Int!) {
+  products(filter: { sku: { in: $skus } }, pageSize: $pageSize) {
+    total_count
+    items {
+      sku
+      special_price
+      special_from_date
+      special_to_date
+      price_range {
+        minimum_price {
+          regular_price {
+            value
+          }
+        }
+      }
+    }
   }
+}`;
 
-  if (
-    specialPrice !== null &&
-    specialPrice > 0 &&
-    specialPrice < regularPrice &&
-    isSpecialPriceActive(product)
-  ) {
-    return ok(shopId, specialPrice.toString(), regularPrice.toString());
-  }
+const nacionalGraphqlPriceItemSchema = z.object({
+  sku: z.string(),
+  special_price: z.number().nullable().optional(),
+  special_from_date: z.string().nullable().optional(),
+  special_to_date: z.string().nullable().optional(),
+  price_range: z
+    .object({
+      minimum_price: z.object({
+        regular_price: z.object({
+          value: z.number().nullable().optional(),
+        }),
+      }),
+    })
+    .nullable()
+    .optional(),
+});
 
-  return ok(shopId, regularPrice.toString(), null);
+export type NacionalGraphqlPriceItem = z.infer<typeof nacionalGraphqlPriceItemSchema>;
+
+export function toNacionalGraphqlPriceResult(
+  item: NacionalGraphqlPriceItem,
+  now = new Date()
+) {
+  return toNacionalPriceResult(
+    {
+      price: item.price_range?.minimum_price.regular_price.value ?? null,
+      specialPrice: item.special_price ?? null,
+      specialFromDate: item.special_from_date ?? null,
+      specialToDate: item.special_to_date ?? null,
+    },
+    now
+  );
+}
+
+export async function fetchNacionalGraphqlPricesBySkus(
+  skus: string[],
+  requestConfig?: FetchWithRetryConfig
+) {
+  return fetchMagentoGraphqlItemsBySku(
+    {
+      url: NACIONAL_GRAPHQL_URL,
+      storeCode: NACIONAL_GRAPHQL_STORE_CODE,
+      query: nacionalPricesBySkuQuery,
+      skus,
+      itemSchema: nacionalGraphqlPriceItemSchema,
+      headers: {
+        Referer: "https://supermercadosnacional.com/",
+        "User-Agent": getNacionalHeaders()["User-Agent"],
+      },
+    },
+    requestConfig
+  );
 }

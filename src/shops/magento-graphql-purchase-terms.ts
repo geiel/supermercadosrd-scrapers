@@ -7,23 +7,21 @@ import {
 import type { ScrapePriceInput } from "../types.js";
 import { parseProductUnit } from "../unit-utils.js";
 
+// peso_variable is asked for directly. Through custom_attributesV2 Magento
+// answers "Internal server error" for many products (checked 2026-10-31 on
+// Jumbo and Merca Jumbo, one product or fifty) and the attribute came back
+// null; on a batch of 50 it also takes ~7 s instead of ~1 s.
 export const magentoPurchaseTermsGraphqlFields = `
       label_peso_variable
       min_qty
       qty_increments
-      custom_attributesV2 {
-        items {
-          code
-          ... on AttributeValue {
-            value
-          }
-        }
-      }`;
+      peso_variable`;
 
 export const magentoPurchaseTermsGraphqlSchema = z.object({
   label_peso_variable: z.string().nullable().optional(),
   min_qty: z.union([z.number(), z.string()]).nullable().optional(),
   qty_increments: z.union([z.number(), z.string()]).nullable().optional(),
+  peso_variable: z.union([z.number(), z.string(), z.boolean()]).nullable().optional(),
   custom_attributesV2: z
     .object({
       items: z
@@ -100,7 +98,12 @@ export function extractMagentoGraphqlPurchaseTerms(
     >;
   }
 ) {
-  const rawPesoVariable = getCustomAttribute(product, "peso_variable");
+  // Kept as the string custom_attributesV2 returned ("0"/"1"), so the saved
+  // evidence keeps its shape.
+  const rawPesoVariable =
+    product.peso_variable === null || product.peso_variable === undefined
+      ? getCustomAttribute(product, "peso_variable")
+      : String(product.peso_variable);
   const pesoVariable = parseBoolean(rawPesoVariable);
   const evidence = {
     label_peso_variable: product.label_peso_variable,

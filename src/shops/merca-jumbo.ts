@@ -7,6 +7,7 @@ import type {
 import {
   extractMercaJumboSkuFromUrl,
   fetchMercaJumboProductBySku,
+  type MercaJumboProduct,
 } from "./merca-jumbo-shared.js";
 import { extractMagentoGraphqlPurchaseTerms } from "./magento-graphql-purchase-terms.js";
 
@@ -40,12 +41,20 @@ export async function scrapeMercaJumboPrice(
     );
   }
 
-  if (!productLookup.product.finalPrice) {
+  return toMercaJumboPriceResult(productLookup.product, input);
+}
+
+// Shared by the single lookup and the batched price sync.
+export function toMercaJumboPriceResult(
+  product: MercaJumboProduct,
+  input: Pick<ScrapePriceInput, "presentation" | "purchaseMode" | "purchaseUnit">
+): ScrapePriceResult {
+  if (!product.finalPrice) {
     return error(shopId, "price_not_found", false, false);
   }
 
   const purchaseTerms = extractMagentoGraphqlPurchaseTerms(
-    productLookup.product.purchaseTermsFields,
+    product.purchaseTermsFields,
     {
       source: "merca_jumbo_graphql",
       productUnit: input,
@@ -54,8 +63,8 @@ export async function scrapeMercaJumboPrice(
 
   return ok(
     shopId,
-    productLookup.product.finalPrice,
-    productLookup.product.regularPrice,
+    product.finalPrice,
+    product.regularPrice,
     null,
     undefined,
     undefined,

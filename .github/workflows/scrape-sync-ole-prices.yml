@@ -1,11 +1,9 @@
 name: scrape-sync-ole-prices
 
 on:
+  # Dispatched every 6 hours by the Supabase cron. A GitHub schedule as well
+  # ran it about seven times a day instead of four.
   workflow_dispatch:
-  schedule:
-    # Every 6 hours at minute 41 UTC (02:41, 08:41, 14:41, 20:41 in Santo Domingo).
-    # Four runs a day keep every price under 12 hours old even if GitHub skips one.
-    - cron: "41 */6 * * *"
 
 concurrency:
   group: scrape-sync-ole-prices

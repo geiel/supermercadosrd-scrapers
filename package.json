@@ -33,6 +33,7 @@
     "scrape:sync-ritmo-sftp-prices": "tsx src/jobs/sync-ritmo-sftp-prices.ts",
     "scrape:sync-supermix-prices": "tsx src/jobs/sync-supermix-prices.ts",
     "scrape:sync-ole-prices": "tsx src/jobs/sync-ole-prices.ts",
+    "scrape:sync-batch-prices": "tsx src/jobs/sync-batch-prices.ts",
     "scrape:recover-hidden-products": "tsx src/jobs/recover-hidden-products.ts",
     "scrape:broken-images-batch": "tsx src/jobs/fix-broken-images-batch.ts",
     "scrape:revert-bravo-second-images": "tsx src/jobs/revert-bravo-second-image-fixes.ts",
