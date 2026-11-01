@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { eq, sql } from "drizzle-orm";
+import { eq, not, sql } from "drizzle-orm";
+import { batchPriceRowCondition } from "../batch-price-sync.js";
 import { applyScrapeResult, type ShopPriceRow } from "../db/apply-scrape-result.js";
 import { closeDb, db } from "../db/client.js";
 import { products, productsShopsPrices, todaysDeals } from "../db/schema.js";
@@ -123,7 +124,9 @@ async function main() {
     })
     .from(todaysDeals)
     .innerJoin(productsShopsPrices, eq(todaysDeals.productId, productsShopsPrices.productId))
-    .innerJoin(products, eq(productsShopsPrices.productId, products.id));
+    .innerJoin(products, eq(productsShopsPrices.productId, products.id))
+    // The batched sync refreshes these rows every two hours.
+    .where(not(batchPriceRowCondition));
 
   const perShopPrices = shopIds.map((shopId) =>
     (shopPrices as ShopPriceRow[]).filter((shopPrice) => shopPrice.shopId === shopId)

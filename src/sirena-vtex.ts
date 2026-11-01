@@ -4,7 +4,11 @@ import {
   SIRENA_PRODUCTS_SEARCH_API_URL,
   SIRENA_PRODUCT_API_URL_TEMPLATE,
 } from "./api-endpoints.js";
-import { fetchWithRetry, getSirenaHeaders } from "./http-client.js";
+import {
+  fetchWithRetry,
+  fetchWithRetryDetailed,
+  getSirenaHeaders,
+} from "./http-client.js";
 import type { FetchWithRetryConfig } from "./types.js";
 
 const SIRENA_BASE_URL = "https://www.sirena.do";
@@ -339,6 +343,76 @@ export async function fetchSirenaVtexProductsByUrl(
 ) {
   const payload = await fetchSirenaVtexJson(url, requestConfig);
   return parseSirenaVtexProductsPayload(payload);
+}
+
+export type SirenaVtexFilterField = "alternateIds_RefId" | "productId";
+
+// VTEX returns at most 50 products per search request (_from=0, _to=49).
+export const SIRENA_VTEX_MAX_SEARCH_RESULTS = 50;
+
+export function buildSirenaVtexFilterApi(
+  field: SirenaVtexFilterField,
+  values: string[]
+) {
+  const params = new URLSearchParams();
+  for (const value of values) {
+    params.append("fq", `${field}:${value}`);
+  }
+  params.set("_from", "0");
+  params.set("_to", String(SIRENA_VTEX_MAX_SEARCH_RESULTS - 1));
+  // Same sales channel as the single lookup, whatever host the endpoint uses.
+  params.set("sc", SIRENA_SALES_CHANNEL);
+
+  return appendSearchParams(SIRENA_PRODUCTS_SEARCH_API_URL, params);
+}
+
+function parseVtexResourcesTotal(value: string | null) {
+  const total = Number(value?.split("/")[1]);
+  return Number.isInteger(total) && total >= 0 ? total : null;
+}
+
+export type SirenaVtexFilterLookup =
+  | { ok: true; products: SirenaVtexProduct[]; total: number | null }
+  | { ok: false; reason: string };
+
+// Repeated fq filters on the same field match any of their values, so one
+// request prices up to 50 products.
+export async function fetchSirenaVtexProductsByFilter(
+  field: SirenaVtexFilterField,
+  values: string[],
+  requestConfig?: FetchWithRetryConfig
+): Promise<SirenaVtexFilterLookup> {
+  const { response, failureReason } = await fetchWithRetryDetailed(
+    withSirenaVtexSalesChannel(buildSirenaVtexFilterApi(field, values)),
+    { headers: getSirenaHeaders() },
+    requestConfig
+  );
+
+  if (!response) {
+    return { ok: false, reason: failureReason };
+  }
+
+  if (!response.ok) {
+    return { ok: false, reason: `http_${response.status}` };
+  }
+
+  const payload: unknown = await response.json().catch(() => null);
+  if (!Array.isArray(payload)) {
+    return { ok: false, reason: "invalid_payload" };
+  }
+
+  // A malformed product is left out, so only its own row falls back to a
+  // single lookup instead of the whole request failing.
+  const products = payload.flatMap((item) => {
+    const parsed = sirenaVtexProductSchema.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  });
+
+  return {
+    ok: true,
+    products,
+    total: parseVtexResourcesTotal(response.headers.get("resources")),
+  };
 }
 
 export async function fetchSirenaVtexProductByApiOrUrl(

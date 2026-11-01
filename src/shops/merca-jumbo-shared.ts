@@ -7,13 +7,15 @@ import {
   magentoPurchaseTermsGraphqlSchema,
   type MagentoGraphqlPurchaseFields,
 } from "./magento-graphql-purchase-terms.js";
+import {
+  fetchMagentoGraphqlItemsBySku,
+  type MagentoGraphqlBatchLookup,
+} from "./magento-graphql-batch.js";
 
 const MERCA_JUMBO_API_URL_ENV = "MERCA_JUMBO_API_URL";
 const MERCA_JUMBO_STORE_CODE_ENV = "MERCA_JUMBO_STORE_CODE";
 
-const mercaJumboProductQuery = `query MercaJumboProductBySku($sku: String!) {
-  products(filter: { sku: { eq: $sku } }) {
-    items {
+const mercaJumboProductItemFields = `
       sku
       name
       url_key
@@ -33,55 +35,67 @@ ${magentoPurchaseTermsGraphqlFields}
             value
           }
         }
-      }
+      }`;
+
+const mercaJumboProductQuery = `query MercaJumboProductBySku($sku: String!) {
+  products(filter: { sku: { eq: $sku } }) {
+    items {${mercaJumboProductItemFields}
     }
   }
 }`;
 
+const mercaJumboProductsBySkuQuery = `query MercaJumboProductsBySku($skus: [String!]!, $pageSize: Int!) {
+  products(filter: { sku: { in: $skus } }, pageSize: $pageSize) {
+    total_count
+    items {${mercaJumboProductItemFields}
+    }
+  }
+}`;
+
+const mercaJumboProductItemSchema = z
+  .object({
+    sku: z.string(),
+    name: z.string().nullable().optional(),
+    url_key: z.string().nullable().optional(),
+    image: z
+      .object({
+        url: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
+    small_image: z
+      .object({
+        url: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
+    price_range: z
+      .object({
+        minimum_price: z.object({
+          final_price: z.object({
+            value: z.number().nullable().optional(),
+          }),
+          regular_price: z.object({
+            value: z.number().nullable().optional(),
+          }),
+        }),
+      })
+      .nullable()
+      .optional(),
+  })
+  .merge(magentoPurchaseTermsGraphqlSchema);
+
+type MercaJumboProductItem = z.infer<typeof mercaJumboProductItemSchema>;
+
 const mercaJumboProductResponseSchema = z.object({
   data: z.object({
     products: z.object({
-      items: z
-        .array(
-          z
-            .object({
-              sku: z.string(),
-              name: z.string().nullable().optional(),
-              url_key: z.string().nullable().optional(),
-              image: z
-                .object({
-                  url: z.string().nullable().optional(),
-                })
-                .nullable()
-                .optional(),
-              small_image: z
-                .object({
-                  url: z.string().nullable().optional(),
-                })
-                .nullable()
-                .optional(),
-              price_range: z
-                .object({
-                  minimum_price: z.object({
-                    final_price: z.object({
-                      value: z.number().nullable().optional(),
-                    }),
-                    regular_price: z.object({
-                      value: z.number().nullable().optional(),
-                    }),
-                  }),
-                })
-                .nullable()
-                .optional(),
-            })
-            .merge(magentoPurchaseTermsGraphqlSchema)
-        )
-        .default([]),
+      items: z.array(mercaJumboProductItemSchema).default([]),
     }),
   }),
 });
 
-type MercaJumboProduct = {
+export type MercaJumboProduct = {
   sku: string;
   name: string | null;
   urlKey: string | null;
@@ -247,21 +261,67 @@ export async function fetchMercaJumboProductBySku(
 
   return {
     status: "ok",
-    product: {
-      sku: product.sku,
-      name: product.name ?? null,
-      urlKey: product.url_key ?? null,
-      imageUrls: dedupeComparableUrls([
-        product.image?.url,
-        product.small_image?.url,
-      ]).map(normalizeNacionalImageUrl),
-      finalPrice: toPriceString(
-        product.price_range?.minimum_price.final_price.value ?? null
-      ),
-      regularPrice: toPriceString(
-        product.price_range?.minimum_price.regular_price.value ?? null
-      ),
-      purchaseTermsFields: product,
+    product: toMercaJumboProduct(product),
+  };
+}
+
+function toMercaJumboProduct(product: MercaJumboProductItem): MercaJumboProduct {
+  return {
+    sku: product.sku,
+    name: product.name ?? null,
+    urlKey: product.url_key ?? null,
+    imageUrls: dedupeComparableUrls([
+      product.image?.url,
+      product.small_image?.url,
+    ]).map(normalizeNacionalImageUrl),
+    finalPrice: toPriceString(
+      product.price_range?.minimum_price.final_price.value ?? null
+    ),
+    regularPrice: toPriceString(
+      product.price_range?.minimum_price.regular_price.value ?? null
+    ),
+    purchaseTermsFields: product,
+  };
+}
+
+export async function fetchMercaJumboProductsBySkus(
+  input: {
+    skus: string[];
+    api: string | null | undefined;
+  },
+  requestConfig?: FetchWithRetryConfig
+): Promise<MagentoGraphqlBatchLookup<MercaJumboProduct>> {
+  const apiUrl = resolveMercaJumboApiUrl(input.api);
+  if (!apiUrl) {
+    return { ok: false, reason: "missing_api" };
+  }
+
+  const storeCode = resolveMercaJumboStoreCode();
+  if (!storeCode) {
+    return { ok: false, reason: "missing_store_code" };
+  }
+
+  const lookup = await fetchMagentoGraphqlItemsBySku(
+    {
+      url: apiUrl,
+      storeCode,
+      query: mercaJumboProductsBySkuQuery,
+      skus: input.skus,
+      itemSchema: mercaJumboProductItemSchema,
     },
+    requestConfig
+  );
+  if (!lookup.ok) {
+    return lookup;
+  }
+
+  return {
+    ...lookup,
+    items: new Map(
+      [...lookup.items].map(([sku, item]) => [
+        sku,
+        item === null ? null : toMercaJumboProduct(item),
+      ])
+    ),
   };
 }

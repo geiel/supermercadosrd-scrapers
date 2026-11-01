@@ -1,0 +1,70 @@
+name: scrape-sync-batch-prices
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every 2 hours at minute 17 UTC. This schedule is the only automatic
+    # trigger: dispatching it from outside as well would run it twice.
+    - cron: "17 */2 * * *"
+
+concurrency:
+  group: scrape-sync-batch-prices
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  scrape-sync-batch-prices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    environment: Production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8.14.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: pnpm
+
+      - name: Install
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+        run: pnpm install --frozen-lockfile
+
+      - name: Route revalidation directly to VPS
+        env:
+          REVALIDATE_ORIGIN_IP: ${{ secrets.REVALIDATE_ORIGIN_IP }}
+        run: |
+          if [ -z "$REVALIDATE_ORIGIN_IP" ]; then
+            echo "::error::REVALIDATE_ORIGIN_IP is not configured"
+            exit 1
+          fi
+          printf '%s\t%s\n' "$REVALIDATE_ORIGIN_IP" "supermercadosrd.com" | sudo tee -a /etc/hosts >/dev/null
+
+      - name: Run batch price sync
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          POSTGRES_MAX_CONNECTIONS: "4"
+          REVALIDATE_BASE_URL: ${{ secrets.REVALIDATE_BASE_URL }}
+          REVALIDATION_SECRET: ${{ secrets.REVALIDATION_SECRET }}
+          MERCA_JUMBO_API_URL: ${{ secrets.MERCA_JUMBO_API_URL }}
+          MERCA_JUMBO_STORE_CODE: ${{ secrets.MERCA_JUMBO_STORE_CODE }}
+          SIRENA_PRODUCT_API_URL_TEMPLATE: ${{ secrets.SIRENA_PRODUCT_API_URL_TEMPLATE }}
+          SIRENA_PRODUCTS_SEARCH_API_URL: ${{ secrets.SIRENA_PRODUCTS_SEARCH_API_URL }}
+          SIRENA_CATEGORY_TREE_API_URL_TEMPLATE: ${{ secrets.SIRENA_CATEGORY_TREE_API_URL_TEMPLATE }}
+          NACIONAL_REST_API_URL: ${{ secrets.NACIONAL_REST_API_URL }}
+          # Not used by these shops, but required when the scrapers load.
+          PLAZA_LAMA_GRAPHQL_URL: ${{ secrets.PLAZA_LAMA_GRAPHQL_URL }}
+          PLAZA_LAMA_DPL_API_KEY: ${{ secrets.PLAZA_LAMA_DPL_API_KEY }}
+          PRICESMART_PRODUCT_API_URL: ${{ secrets.PRICESMART_PRODUCT_API_URL }}
+          PRICESMART_DISCOVERY_API_URL: ${{ secrets.PRICESMART_DISCOVERY_API_URL }}
+        run: pnpm scrape:sync-batch-prices

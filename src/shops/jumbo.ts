@@ -25,12 +25,11 @@ import {
   magentoPurchaseTermsGraphqlFields,
   magentoPurchaseTermsGraphqlSchema,
 } from "./magento-graphql-purchase-terms.js";
+import { fetchMagentoGraphqlItemsBySku } from "./magento-graphql-batch.js";
 
 const shopId = 3;
 
-const jumboProductQuery = `query JumboProductBySku($sku: String!) {
-  products(filter: { sku: { eq: $sku } }) {
-    items {
+const jumboProductItemFields = `
       sku
       name
       url_key
@@ -45,65 +44,75 @@ ${magentoPurchaseTermsGraphqlFields}
             value
           }
         }
-      }
+      }`;
+
+const jumboProductQuery = `query JumboProductBySku($sku: String!) {
+  products(filter: { sku: { eq: $sku } }) {
+    items {${jumboProductItemFields}
     }
   }
 }`;
 
+const jumboProductsBySkuQuery = `query JumboProductsBySku($skus: [String!]!, $pageSize: Int!) {
+  products(filter: { sku: { in: $skus } }, pageSize: $pageSize) {
+    total_count
+    items {${jumboProductItemFields}
+    }
+  }
+}`;
+
+const jumboProductItemSchema = z
+  .object({
+    sku: z.string(),
+    name: z.string().nullable().optional(),
+    url_key: z.string().nullable().optional(),
+    image: z
+      .object({
+        url: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
+    small_image: z
+      .object({
+        url: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
+    thumbnail: z
+      .object({
+        url: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
+    media_gallery: z
+      .array(
+        z.object({
+          url: z.string().nullable().optional(),
+          disabled: z.boolean().nullable().optional(),
+        })
+      )
+      .nullable()
+      .optional(),
+    price_range: z
+      .object({
+        minimum_price: z.object({
+          final_price: z.object({
+            value: z.number().nullable().optional(),
+          }),
+          regular_price: z.object({
+            value: z.number().nullable().optional(),
+          }),
+        }),
+      })
+      .nullable()
+      .optional(),
+  })
+  .merge(magentoPurchaseTermsGraphqlSchema);
+
 const jumboProductResponseSchema = z.object({
   data: z.object({
     products: z.object({
-      items: z
-        .array(
-          z
-            .object({
-              sku: z.string(),
-              name: z.string().nullable().optional(),
-              url_key: z.string().nullable().optional(),
-              image: z
-                .object({
-                  url: z.string().nullable().optional(),
-                })
-                .nullable()
-                .optional(),
-              small_image: z
-                .object({
-                  url: z.string().nullable().optional(),
-                })
-                .nullable()
-                .optional(),
-              thumbnail: z
-                .object({
-                  url: z.string().nullable().optional(),
-                })
-                .nullable()
-                .optional(),
-              media_gallery: z
-                .array(
-                  z.object({
-                    url: z.string().nullable().optional(),
-                    disabled: z.boolean().nullable().optional(),
-                  })
-                )
-                .nullable()
-                .optional(),
-              price_range: z
-                .object({
-                  minimum_price: z.object({
-                    final_price: z.object({
-                      value: z.number().nullable().optional(),
-                    }),
-                    regular_price: z.object({
-                      value: z.number().nullable().optional(),
-                    }),
-                  }),
-                })
-                .nullable()
-                .optional(),
-            })
-            .merge(magentoPurchaseTermsGraphqlSchema)
-        )
-        .default([]),
+      items: z.array(jumboProductItemSchema).default([]),
     }),
   }),
 });
@@ -114,8 +123,7 @@ function toPriceString(value: number | null | undefined) {
     : String(value);
 }
 
-type JumboProduct =
-  z.infer<typeof jumboProductResponseSchema>["data"]["products"]["items"][number];
+export type JumboProduct = z.infer<typeof jumboProductItemSchema>;
 
 function buildScrapeableJumboProductUrl(product: JumboProduct) {
   const urlFromKey = product.url_key
@@ -192,42 +200,71 @@ export async function scrapeJumboPrice(
       continue;
     }
 
-    const finalPriceValue =
-      product.price_range?.minimum_price.final_price.value ?? null;
-    const finalPrice = toPriceString(finalPriceValue);
-
-    if (!finalPrice) {
-      return error(shopId, "price_not_found", false, false);
-    }
-
-    if (finalPriceValue === 0 && extractJumboImageUrls(product).length === 0) {
-      return notFound(shopId, "price_zero_without_images", true);
-    }
-
-    const regularPriceValue =
-      product.price_range?.minimum_price.regular_price.value ?? null;
-    const regularPrice =
-      regularPriceValue !== null &&
-      regularPriceValue !== undefined &&
-      regularPriceValue > Number(finalPrice)
-        ? toPriceString(regularPriceValue)
-        : null;
-
-    const purchaseTerms = extractMagentoGraphqlPurchaseTerms(product, {
-      source: "jumbo_graphql",
-      productUnit: input,
-    });
-
-    return ok(
-      shopId,
-      finalPrice,
-      regularPrice,
-      null,
-      buildScrapeableJumboProductUrl(product),
-      undefined,
-      purchaseTerms
-    );
+    return toJumboPriceResult(product, input);
   }
 
   return notFound(shopId, "product_not_found", true);
+}
+
+// Shared by the single lookup and the batched price sync.
+export function toJumboPriceResult(
+  product: JumboProduct,
+  input: Pick<ScrapePriceInput, "presentation" | "purchaseMode" | "purchaseUnit">
+): ScrapePriceResult {
+  const finalPriceValue =
+    product.price_range?.minimum_price.final_price.value ?? null;
+  const finalPrice = toPriceString(finalPriceValue);
+
+  if (!finalPrice) {
+    return error(shopId, "price_not_found", false, false);
+  }
+
+  if (finalPriceValue === 0 && extractJumboImageUrls(product).length === 0) {
+    return notFound(shopId, "price_zero_without_images", true);
+  }
+
+  const regularPriceValue =
+    product.price_range?.minimum_price.regular_price.value ?? null;
+  const regularPrice =
+    regularPriceValue !== null &&
+    regularPriceValue !== undefined &&
+    regularPriceValue > Number(finalPrice)
+      ? toPriceString(regularPriceValue)
+      : null;
+
+  const purchaseTerms = extractMagentoGraphqlPurchaseTerms(product, {
+    source: "jumbo_graphql",
+    productUnit: input,
+  });
+
+  return ok(
+    shopId,
+    finalPrice,
+    regularPrice,
+    null,
+    buildScrapeableJumboProductUrl(product),
+    undefined,
+    purchaseTerms
+  );
+}
+
+export async function fetchJumboProductsBySkus(
+  skus: string[],
+  requestConfig?: FetchWithRetryConfig
+) {
+  return fetchMagentoGraphqlItemsBySku(
+    {
+      url: JUMBO_GRAPHQL_URL,
+      storeCode: resolveJumboStoreCode(),
+      query: jumboProductsBySkuQuery,
+      skus,
+      itemSchema: jumboProductItemSchema,
+      headers: {
+        ...getJumboHeaders(),
+        Origin: "https://jumbo.com.do",
+        Referer: "https://jumbo.com.do/",
+      },
+    },
+    requestConfig
+  );
 }

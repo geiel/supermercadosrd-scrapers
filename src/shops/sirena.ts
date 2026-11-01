@@ -5,6 +5,7 @@ import {
   normalizeSirenaVtexProduct,
   parseSirenaVtexProductsPayload,
   withSirenaVtexSalesChannel,
+  type SirenaVtexProduct,
 } from "../sirena-vtex.js";
 import type {
   FetchWithRetryConfig,
@@ -41,6 +42,29 @@ function isPositivePriceString(value: string | null | undefined) {
   return Number.isFinite(price) && price > 0;
 }
 
+// Shared by the single lookup and the batched price sync, so both read a VTEX
+// product the same way.
+export function toSirenaVtexPriceResult(
+  product: SirenaVtexProduct,
+  input: Pick<ScrapePriceInput, "presentation" | "purchaseMode" | "purchaseUnit">
+): ScrapePriceResult {
+  const normalizedProduct = normalizeSirenaVtexProduct(product);
+
+  if (!normalizedProduct.currentPrice) {
+    return notFound(shopId, "vtex_price_not_found", true);
+  }
+
+  return ok(
+    shopId,
+    normalizedProduct.currentPrice,
+    normalizedProduct.regularPrice,
+    null,
+    undefined,
+    undefined,
+    extractSirenaVtexPurchaseTerms(normalizedProduct, input)
+  );
+}
+
 export async function scrapeSirenaPrice(
   input: ScrapePriceInput,
   requestConfig?: FetchWithRetryConfig
@@ -66,21 +90,7 @@ export async function scrapeSirenaPrice(
 
   const vtexProducts = parseSirenaVtexProductsPayload(jsonResponse);
   if (vtexProducts?.[0]) {
-    const normalizedProduct = normalizeSirenaVtexProduct(vtexProducts[0]);
-
-    if (!normalizedProduct.currentPrice) {
-      return notFound(shopId, "vtex_price_not_found", true);
-    }
-
-    return ok(
-      shopId,
-      normalizedProduct.currentPrice,
-      normalizedProduct.regularPrice,
-      null,
-      undefined,
-      undefined,
-      extractSirenaVtexPurchaseTerms(normalizedProduct, input)
-    );
+    return toSirenaVtexPriceResult(vtexProducts[0], input);
   }
 
   const parsed = productSchema.safeParse(jsonResponse);

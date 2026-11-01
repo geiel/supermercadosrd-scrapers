@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { and, eq, isNull, not, notInArray, or, sql } from "drizzle-orm";
+import { batchPriceRowCondition } from "../batch-price-sync.js";
 import { applyScrapeResult, type ShopPriceRow } from "../db/apply-scrape-result.js";
 import { closeDb, db } from "../db/client.js";
 import { products, productsShopsPrices } from "../db/schema.js";
@@ -9,6 +10,11 @@ import type { ShopId } from "../types.js";
 import { randomDelay } from "../utils.js";
 
 const shopIds = [1, 2, 3, 4, 5, 6, 7, 8, 10] as const;
+
+// Nacional, Jumbo and Merca Jumbo, and Sirena's VTEX rows, are priced by the
+// batched sync (sync-batch-prices). A routine run only prices the rest; a run
+// for one product or one shop still prices any row.
+const batchSyncedShopIds: readonly ShopId[] = [2, 3, 7];
 
 function isShopId(value: number): value is ShopId {
   return (shopIds as readonly number[]).includes(value);
@@ -100,6 +106,7 @@ async function processShopPrice(
   }
 
   await applyScrapeResult(shopPrice, result);
+  return result;
 }
 
 async function main() {
@@ -139,8 +146,19 @@ async function main() {
           )
         ),
   );
+  const routineRun = targetProductId === null && targetShopId === null;
   const selectedShopIds: readonly ShopId[] =
-    targetShopId === null ? shopIds : [targetShopId as ShopId];
+    targetShopId !== null
+      ? [targetShopId as ShopId]
+      : routineRun
+        ? shopIds.filter((shopId) => !batchSyncedShopIds.includes(shopId))
+        : shopIds;
+
+  // A failure that does not hide the row leaves updateAt as it was, so the row
+  // would come back first in every iteration. Skip it for the rest of the run.
+  const failedProductIds = new Map<ShopId, Set<number>>(
+    selectedShopIds.map((shopId) => [shopId, new Set<number>()])
+  );
 
   console.time("batch-shop-prices");
   for (let iteration = 1; iteration <= iterationCount; iteration += 1) {
@@ -171,8 +189,20 @@ async function main() {
           })
           .from(productsShopsPrices)
           .innerJoin(products, eq(productsShopsPrices.productId, products.id))
-          .where(and(eq(productsShopsPrices.shopId, shopId), shopPricesFilter))
-          .orderBy(productsShopsPrices.updateAt)
+          .where(
+            and(
+              eq(productsShopsPrices.shopId, shopId),
+              shopPricesFilter,
+              routineRun ? not(batchPriceRowCondition) : undefined,
+              failedProductIds.get(shopId)!.size > 0
+                ? notInArray(productsShopsPrices.productId, [
+                    ...failedProductIds.get(shopId)!,
+                  ])
+                : undefined
+            )
+          )
+          // Never-priced rows first; plain ASC would put NULLs last.
+          .orderBy(sql`${productsShopsPrices.updateAt} asc nulls first`)
           .limit(urlsPerShop);
 
         return rows as ShopPriceRow[];
@@ -198,7 +228,12 @@ async function main() {
       );
 
       await Promise.all(
-        roundPrices.map((shopPrice) => processShopPrice(shopPrice, timeoutMs, maxRetries))
+        roundPrices.map(async (shopPrice) => {
+          const result = await processShopPrice(shopPrice, timeoutMs, maxRetries);
+          if (result && result.status !== "ok" && !result.hide) {
+            failedProductIds.get(shopPrice.shopId as ShopId)?.add(shopPrice.productId);
+          }
+        })
       );
 
       if (round < urlsPerShop - 1 && roundPrices.length > 0) {
