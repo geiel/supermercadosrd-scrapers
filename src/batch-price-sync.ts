@@ -5,7 +5,10 @@ import {
   extractJumboSkuCandidates,
   extractNacionalSku,
 } from "./recovery/shared.js";
-import { extractMercaJumboSkuFromUrl } from "./shops/merca-jumbo-shared.js";
+import {
+  extractMercaJumboSkuFromUrl,
+  resolveMercaJumboApiUrl,
+} from "./shops/merca-jumbo-shared.js";
 import type { SirenaVtexProduct } from "./sirena-vtex.js";
 
 // Shops priced by the batched sync instead of one request per product.
@@ -90,8 +93,10 @@ export function batchLookupKeys(row: ShopPriceRow): BatchLookupKeys | null {
     }
     case 7: {
       const sku = extractMercaJumboSkuFromUrl(row.url);
-      // The single lookup falls back to MERCA_JUMBO_API_URL when api is empty.
-      return sku ? { group: `merca_jumbo:${row.api ?? ""}`, keys: [sku] } : null;
+      // Grouped by the endpoint the single lookup would call.
+      return sku
+        ? { group: `merca_jumbo:${resolveMercaJumboApiUrl(row.api) ?? ""}`, keys: [sku] }
+        : null;
     }
     default:
       return null;

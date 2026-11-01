@@ -14,6 +14,7 @@ for (const name of [
 ]) {
   process.env[name] ??= "https://example.com";
 }
+process.env.MERCA_JUMBO_API_URL ??= "https://supermercadosnacional.com/graphql";
 
 const sirenaRequests: URL[] = [];
 const sirenaServer = createServer((request, response) => {
@@ -152,6 +153,13 @@ test("builds lookup keys per shop and leaves unbatchable rows to the single look
     batchLookupKeys(row(7, "https://supermercadosnacional.com/tocineta-ahumada-lider-8-onz-2217470", "https://supermercadosnacional.com/graphql")),
     { group: "merca_jumbo:https://supermercadosnacional.com/graphql", keys: ["2217470"] }
   );
+  // Rows whose api holds the SKU, or nothing, use the configured endpoint.
+  for (const api of ["2242780", null]) {
+    assert.deepEqual(
+      batchLookupKeys(row(7, "https://supermercadosnacional.com/bizcocho-dulce-de-calabaza-y-chocolate-1-2-lb-2242780", api)),
+      { group: "merca_jumbo:https://supermercadosnacional.com/graphql", keys: ["2242780"] }
+    );
+  }
   assert.equal(batchLookupKeys(row(2, "https://supermercadosnacional.com/sin-sku")), null);
   assert.equal(batchLookupKeys(row(4, "https://plazalama.com.do/p/x-123456")), null);
 });
