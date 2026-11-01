@@ -225,8 +225,7 @@ export type NacionalPriceFields = {
   specialToDate: unknown;
 };
 
-// The REST lookup and the batched GraphQL sync read the same Magento fields
-// and price them with this one rule.
+// The REST lookup's rule: the special price while its dates allow it.
 export function toNacionalPriceResult(
   fields: NacionalPriceFields,
   now = new Date()
@@ -315,16 +314,22 @@ const NACIONAL_GRAPHQL_STORE_CODE = "default";
 // GraphQL only lists products that are enabled on the Nacional website, which
 // the REST lookup checks through status and website_ids. A SKU it leaves out
 // is looked up through REST, which decides whether to hide the price.
+//
+// The batch takes Magento's own final_price, the price the Nacional website
+// shows and charges, as Jumbo and Merca Jumbo do. It does not re-apply
+// special_from_date/special_to_date: on 2026-11-01 Nacional still charged the
+// special price of offers whose special_to_date had passed (36 of 40 sampled
+// price changes), and the dates read in UTC end offers 4 hours early.
 const nacionalPricesBySkuQuery = `query NacionalPricesBySku($skus: [String!]!, $pageSize: Int!) {
   products(filter: { sku: { in: $skus } }, pageSize: $pageSize) {
     total_count
     items {
       sku
-      special_price
-      special_from_date
-      special_to_date
       price_range {
         minimum_price {
+          final_price {
+            value
+          }
           regular_price {
             value
           }
@@ -336,12 +341,12 @@ const nacionalPricesBySkuQuery = `query NacionalPricesBySku($skus: [String!]!, $
 
 const nacionalGraphqlPriceItemSchema = z.object({
   sku: z.string(),
-  special_price: z.number().nullable().optional(),
-  special_from_date: z.string().nullable().optional(),
-  special_to_date: z.string().nullable().optional(),
   price_range: z
     .object({
       minimum_price: z.object({
+        final_price: z.object({
+          value: z.number().nullable().optional(),
+        }),
         regular_price: z.object({
           value: z.number().nullable().optional(),
         }),
@@ -354,18 +359,20 @@ const nacionalGraphqlPriceItemSchema = z.object({
 export type NacionalGraphqlPriceItem = z.infer<typeof nacionalGraphqlPriceItemSchema>;
 
 export function toNacionalGraphqlPriceResult(
-  item: NacionalGraphqlPriceItem,
-  now = new Date()
-) {
-  return toNacionalPriceResult(
-    {
-      price: item.price_range?.minimum_price.regular_price.value ?? null,
-      specialPrice: item.special_price ?? null,
-      specialFromDate: item.special_from_date ?? null,
-      specialToDate: item.special_to_date ?? null,
-    },
-    now
-  );
+  item: NacionalGraphqlPriceItem
+): ScrapePriceResult {
+  const regularPrice = parsePrice(item.price_range?.minimum_price.regular_price.value);
+  const finalPrice = parsePrice(item.price_range?.minimum_price.final_price.value);
+
+  if (regularPrice === null || finalPrice === null) {
+    return error(shopId, "price_not_found", false, false);
+  }
+
+  if (finalPrice > 0 && finalPrice < regularPrice) {
+    return ok(shopId, finalPrice.toString(), regularPrice.toString());
+  }
+
+  return ok(shopId, regularPrice.toString(), null);
 }
 
 export async function fetchNacionalGraphqlPricesBySkus(
