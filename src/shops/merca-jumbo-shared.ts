@@ -136,8 +136,12 @@ function normalizeEnvValue(value: string | undefined) {
   return normalized ? normalized : null;
 }
 
+// api may hold the GraphQL endpoint, nothing, or (rows added on 2026-11-01)
+// the SKU itself; only an http(s) URL overrides the configured endpoint.
 export function resolveMercaJumboApiUrl(api: string | null | undefined) {
-  return normalizeEnvValue(api ?? undefined) ?? normalizeEnvValue(process.env[MERCA_JUMBO_API_URL_ENV]);
+  const value = normalizeEnvValue(api ?? undefined);
+  return (value && /^https?:\/\//i.test(value) ? value : null) ??
+    normalizeEnvValue(process.env[MERCA_JUMBO_API_URL_ENV]);
 }
 
 function resolveMercaJumboStoreCode() {
