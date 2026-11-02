@@ -116,7 +116,11 @@ fails for another reason is split in two and each half asked again, down to
 single rows: one product that breaks the store's query (on 2026-11-02 Nacional,
 Jumbo and Merca Jumbo answered "Internal server error" for any batch holding
 SKU 2235195) then fails only its own row, which keeps its stored price, and a
-passing VTEX HTTP 500 is retried in halves. Rows without a SKU in their URL get the single scraper's
+passing VTEX HTTP 500 is retried in halves. Splitting costs ~10 requests per
+broken product and stops after 50 split requests per shop and run
+(`--max-split-requests`), so a backend that fails everything without a 503
+gets at most ~53 requests before the run stops and fails, instead of being
+asked row by row. Rows without a SKU in their URL get the single scraper's
 error without a request. Hidden rows are
 rechecked once a day; one that is still unavailable only gets `updateAt`
 moved, without a page revalidation.

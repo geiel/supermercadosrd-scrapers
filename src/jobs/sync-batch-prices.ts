@@ -350,6 +350,7 @@ type RunOptions = {
   dryRun: boolean;
   batchSize: number;
   maxLookups: number;
+  maxSplitRequests: number;
   concurrency: number;
   delayMinMs: number;
   delayMaxMs: number;
@@ -365,6 +366,11 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
   let requestCount = 0;
   let consecutiveFailures = 0;
   let stoppedReason: string | null = null;
+  // Isolating one broken product costs ~10 requests. A backend that fails
+  // every request without a 503 would otherwise be split row by row, so each
+  // shop stops splitting after this many requests in a run (and three failed
+  // batches in a row stop the whole queue).
+  let splitRequests = 0;
 
   async function paceRequest() {
     if (requestCount > 0) {
@@ -414,6 +420,7 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
   for (const shopId of shopIds) {
     const shopName = SHOP_NAMES[shopId];
     const shopStartedAt = Date.now();
+    splitRequests = 0;
     const rows = await loadShopRows(shopId, options.productId, options.limit);
     const report: ShopReport = {
       shopId,
@@ -529,6 +536,9 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
 
       await paceRequest();
       report.batchRequests += 1;
+      if (split) {
+        splitRequests += 1;
+      }
       const outcome = await priceChunk(shopId, chunk, options.requestConfig);
       recordRequest(outcome.ok ? null : outcome.reason, !split);
 
@@ -542,6 +552,10 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
         }
 
         const halves = splitBatchChunk(chunk);
+        if (halves && splitRequests + halves.length > options.maxSplitRequests) {
+          report.failures.push(`split_limit_reached:${outcome.reason}`);
+          continue;
+        }
         if (halves) {
           queue.unshift(...halves.map((half) => ({ chunk: half, split: true })));
           continue;
@@ -641,6 +655,7 @@ async function main() {
     dryRun,
     batchSize: parseNumberArg(args, "--batch-size", 50),
     maxLookups: parseNumberArg(args, "--max-lookups", 300),
+    maxSplitRequests: parseNumberArg(args, "--max-split-requests", 50),
     concurrency: parseNumberArg(args, "--concurrency", 2),
     delayMinMs: parseNumberArg(args, "--delay-min", 1000),
     delayMaxMs: parseNumberArg(args, "--delay-max", 1500),
