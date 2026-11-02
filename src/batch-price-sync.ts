@@ -153,6 +153,22 @@ export function chunkBatchRows(
   return chunks;
 }
 
+// Splits a request that failed into two of about half the keys, so one
+// product that breaks the store's query (Magento answers "Internal server
+// error" for the whole batch) only fails its own row. null means the chunk
+// is a single row and cannot be split further.
+export function splitBatchChunk(chunk: BatchChunk): BatchChunk[] | null {
+  if (chunk.rows.length < 2) {
+    return null;
+  }
+
+  const halves = chunkBatchRows(
+    chunk.rows.map((row) => ({ row, lookup: batchLookupKeys(row)! })),
+    Math.ceil(chunk.keys.length / 2)
+  );
+  return halves.length > 1 ? halves : null;
+}
+
 function normalizeSlug(value: string) {
   try {
     return decodeURIComponent(value).trim().toLowerCase();

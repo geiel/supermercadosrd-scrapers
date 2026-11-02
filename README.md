@@ -112,8 +112,11 @@ apart, and stops asking a backend for the rest of the run after an HTTP 403,
 Visible rows are priced on every run, oldest first. A visible row a good
 response leaves out is looked up with the single scraper (at most 300 per shop
 and run), so a price is hidden on the same evidence as before. A request that
-fails for another reason (VTEX answers the odd HTTP 500) is retried once at
-the end of its shop. Rows without a SKU in their URL get the single scraper's
+fails for another reason is split in two and each half asked again, down to
+single rows: one product that breaks the store's query (on 2026-11-02 Nacional,
+Jumbo and Merca Jumbo answered "Internal server error" for any batch holding
+SKU 2235195) then fails only its own row, which keeps its stored price, and a
+passing VTEX HTTP 500 is retried in halves. Rows without a SKU in their URL get the single scraper's
 error without a request. Hidden rows are
 rechecked once a day; one that is still unavailable only gets `updateAt`
 moved, without a page revalidation.
@@ -122,9 +125,10 @@ The rows this job owns (`batchPriceRowCondition` in `src/batch-price-sync.ts`)
 are skipped by the routine per-product batch and by the deals job. A
 per-product run for `--product-id` or `--shop-id` still prices any row.
 
-The run fails, so GitHub sends a notification, when a request fails, the
-lookup limit is reached, a backend is stopped, or a visible price is older than
-6 hours. Use `--dry-run` to fetch prices without writing (`--report <file>`
+The run fails, so GitHub sends a notification, when a backend is stopped, the
+lookup limit is reached, more than 25 products could not be priced, or more
+than 25 visible prices are older than 6 hours. Fewer are listed in the run
+summary without failing it (`--max-row-failures`, `--max-stale`). Use `--dry-run` to fetch prices without writing (`--report <file>`
 writes one JSON line per row), and `--shop-id`, `--product-id` or `--limit`
 (rows per shop) for partial runs.
 

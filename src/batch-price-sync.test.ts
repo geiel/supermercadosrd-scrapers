@@ -43,6 +43,7 @@ const {
   matchSkuItems,
   parseSirenaBatchReference,
   SIRENA_BATCH_API_PATTERN,
+  splitBatchChunk,
 } = await import("./batch-price-sync.js");
 const { fetchSirenaVtexProductsByFilter, parseSirenaVtexProductsPayload } = await import("./sirena-vtex.js");
 const { fetchMagentoGraphqlItemsBySku } = await import("./shops/magento-graphql-batch.js");
@@ -189,6 +190,46 @@ test("packs rows into requests of at most maxKeys keys without mixing groups", (
       { group: "productId", keys: ["20960"], rows: [2] },
       { group: "alternateIds_RefId", keys: ["1061566"], rows: [5] },
     ]
+  );
+});
+
+test("splits a failed request until the breaking product is alone", () => {
+  const rows = [2010121, 2010122, 2010123, 2235195, 2010125].map((sku, index) =>
+    row(2, `https://supermercadosnacional.com/producto-${sku}`, null, index + 1)
+  );
+  const [chunk] = chunkBatchRows(
+    rows.map((item) => ({ row: item, lookup: batchLookupKeys(item)! })),
+    50
+  );
+
+  // Halving down to one row takes a few requests, never a loop.
+  const isolated: number[] = [];
+  const queue = [chunk];
+  let requests = 0;
+  while (queue.length > 0) {
+    const next = queue.shift()!;
+    requests += 1;
+    if (!next.keys.includes("2235195")) {
+      continue;
+    }
+    const halves = splitBatchChunk(next);
+    if (halves) {
+      for (const half of halves) {
+        assert.ok(half.keys.length <= Math.ceil(next.keys.length / 2));
+      }
+      queue.unshift(...halves);
+    } else {
+      isolated.push(...next.rows.map((item) => item.productId));
+    }
+  }
+
+  assert.deepEqual(isolated, [4]);
+  assert.ok(requests <= 7, `requests=${requests}`);
+  // A Jumbo row with two SKU candidates is one row: it is not split.
+  const jumbo = row(3, "https://jumbo.com.do/x-9982168236");
+  assert.equal(
+    splitBatchChunk(chunkBatchRows([{ row: jumbo, lookup: batchLookupKeys(jumbo)! }], 50)[0]),
+    null
   );
 });
 
