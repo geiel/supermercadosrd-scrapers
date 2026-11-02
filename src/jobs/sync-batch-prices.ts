@@ -9,6 +9,7 @@ import {
   chunkBatchRows,
   matchSirenaProducts,
   matchSkuItems,
+  splitBatchChunk,
   type BatchChunk,
   type BatchPriceShopId,
 } from "../batch-price-sync.js";
@@ -338,13 +339,18 @@ type ShopReport = {
   priceChanges: number;
   minutes: number;
   outcomes: Map<string, number>;
+  // Systemic problems: a stopped backend, skipped rows, the lookup limit.
   failures: string[];
+  // One product the store cannot serve (isolated by splitting) or a failed
+  // single lookup. A few are reported; many fail the run.
+  rowFailures: string[];
 };
 
 type RunOptions = {
   dryRun: boolean;
   batchSize: number;
   maxLookups: number;
+  maxSplitRequests: number;
   concurrency: number;
   delayMinMs: number;
   delayMaxMs: number;
@@ -360,6 +366,11 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
   let requestCount = 0;
   let consecutiveFailures = 0;
   let stoppedReason: string | null = null;
+  // Isolating one broken product costs ~10 requests. A backend that fails
+  // every request without a 503 would otherwise be split row by row, so each
+  // shop stops splitting after this many requests in a run (and three failed
+  // batches in a row stop the whole queue).
+  let splitRequests = 0;
 
   async function paceRequest() {
     if (requestCount > 0) {
@@ -369,17 +380,26 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
     requestCount += 1;
   }
 
-  function recordRequest(reason: string | null) {
+  // Requests that split a failed batch do not count toward the consecutive
+  // failures: one broken product fails every half that holds it.
+  function recordRequest(reason: string | null, countsTowardStop = true) {
     if (reason === null) {
-      consecutiveFailures = 0;
+      if (countsTowardStop) {
+        consecutiveFailures = 0;
+      }
       return;
     }
 
-    consecutiveFailures += 1;
     if (BACKOFF_REASONS.has(reason)) {
       stoppedReason = reason;
-    } else if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-      stoppedReason = `${consecutiveFailures}_consecutive_failures:${reason}`;
+      return;
+    }
+
+    if (countsTowardStop) {
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        stoppedReason = `${consecutiveFailures}_consecutive_failures:${reason}`;
+      }
     }
   }
 
@@ -400,6 +420,7 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
   for (const shopId of shopIds) {
     const shopName = SHOP_NAMES[shopId];
     const shopStartedAt = Date.now();
+    splitRequests = 0;
     const rows = await loadShopRows(shopId, options.productId, options.limit);
     const report: ShopReport = {
       shopId,
@@ -412,6 +433,7 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
       minutes: 0,
       outcomes: new Map(),
       failures: [],
+      rowFailures: [],
     };
     reports.push(report);
     console.log(`[INFO] ${shopName} rows=${rows.length}`);
@@ -497,59 +519,77 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
       shopId === 1 ? SIRENA_VTEX_MAX_SEARCH_RESULTS : options.batchSize
     );
 
-    // A request that fails for any reason but backoff (a passing HTTP 500 from
-    // VTEX, a timeout) is tried once more after the shop's other requests.
-    const retries: BatchChunk[] = [];
-    const chunks = chunkBatchRows(batchable, maxKeys);
-    for (const [attempt, queue] of [
-      [1, chunks],
-      [2, retries],
-    ] as const) {
-      for (const chunk of queue) {
-        if (stoppedReason) {
-          report.failures.push(`skipped_${chunk.rows.length}_rows`);
-          continue;
-        }
-
-        await paceRequest();
-        report.batchRequests += 1;
-        const outcome = await priceChunk(shopId, chunk, options.requestConfig);
-        recordRequest(outcome.ok ? null : outcome.reason);
-
-        if (!outcome.ok) {
-          console.error(
-            `[ERROR] ${shopName} batch of ${chunk.rows.length} rows failed (attempt ${attempt}) reason=${outcome.reason} ${chunk.group}=${chunk.keys.join(",")}`
-          );
-          if (attempt === 1 && !BACKOFF_REASONS.has(outcome.reason)) {
-            retries.push(chunk);
-          } else {
-            report.failures.push(outcome.reason);
-          }
-          continue;
-        }
-
-        const writes = [];
-        for (const row of chunk.rows) {
-          const result = outcome.results.get(row);
-          if (!result) {
-            // Left out of a good response: visible rows get the single
-            // lookup; hidden ones stay hidden until they show up again.
-            if (row.hidden) {
-              stillHidden.push(row);
-            } else {
-              missing.push(row);
-            }
-            continue;
-          }
-
-          report.batchFound += 1;
-          const write = settle(row, result, "batch");
-          if (write) {
-            writes.push(write);
-          }
-        }
-        writeResults(writes);
+    // A request that fails for any reason but backoff is split in two and
+    // each half is asked again, down to single rows. A product that breaks
+    // the store's query (Magento "Internal server error", VTEX HTTP 500) then
+    // fails only its own row; a passing error is simply retried in halves.
+    const queue = chunkBatchRows(batchable, maxKeys).map((chunk) => ({
+      chunk,
+      split: false,
+    }));
+    while (queue.length > 0) {
+      const { chunk, split } = queue.shift()!;
+      if (stoppedReason) {
+        report.failures.push(`skipped_${chunk.rows.length}_rows`);
+        continue;
       }
+
+      await paceRequest();
+      report.batchRequests += 1;
+      if (split) {
+        splitRequests += 1;
+      }
+      const outcome = await priceChunk(shopId, chunk, options.requestConfig);
+      recordRequest(outcome.ok ? null : outcome.reason, !split);
+
+      if (!outcome.ok) {
+        console.error(
+          `[ERROR] ${shopName} batch of ${chunk.rows.length} rows failed${split ? " (split)" : ""} reason=${outcome.reason} ${chunk.group}=${chunk.keys.join(",")}`
+        );
+        if (BACKOFF_REASONS.has(outcome.reason)) {
+          report.failures.push(outcome.reason);
+          continue;
+        }
+
+        const halves = splitBatchChunk(chunk);
+        if (halves && splitRequests + halves.length > options.maxSplitRequests) {
+          report.failures.push(`split_limit_reached:${outcome.reason}`);
+          continue;
+        }
+        if (halves) {
+          queue.unshift(...halves.map((half) => ({ chunk: half, split: true })));
+          continue;
+        }
+
+        // One row the store cannot price: keep its stored price.
+        for (const row of chunk.rows) {
+          report.rowFailures.push(`${row.productId}:${outcome.reason}`);
+          settle(row, error(shopId, outcome.reason, true, false), "batch");
+        }
+        continue;
+      }
+
+      const writes = [];
+      for (const row of chunk.rows) {
+        const result = outcome.results.get(row);
+        if (!result) {
+          // Left out of a good response: visible rows get the single
+          // lookup; hidden ones stay hidden until they show up again.
+          if (row.hidden) {
+            stillHidden.push(row);
+          } else {
+            missing.push(row);
+          }
+          continue;
+        }
+
+        report.batchFound += 1;
+        const write = settle(row, result, "batch");
+        if (write) {
+          writes.push(write);
+        }
+      }
+      writeResults(writes);
     }
 
     // Single lookups, capped so a broken batch cannot turn into thousands of
@@ -572,7 +612,7 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
       const failed = result.status === "error" && result.retryable;
       recordRequest(failed ? result.reason : null);
       if (failed) {
-        report.failures.push(`lookup:${result.reason}`);
+        report.rowFailures.push(`${row.productId}:lookup:${result.reason}`);
       }
 
       const write = settle(row, result, "lookup");
@@ -615,6 +655,7 @@ async function main() {
     dryRun,
     batchSize: parseNumberArg(args, "--batch-size", 50),
     maxLookups: parseNumberArg(args, "--max-lookups", 300),
+    maxSplitRequests: parseNumberArg(args, "--max-split-requests", 50),
     concurrency: parseNumberArg(args, "--concurrency", 2),
     delayMinMs: parseNumberArg(args, "--delay-min", 1000),
     delayMaxMs: parseNumberArg(args, "--delay-max", 1500),
@@ -630,6 +671,10 @@ async function main() {
     writeFileSync(reportPath, "");
   }
   const maxAgeHours = parseNumberArg(args, "--max-age-hours", 6);
+  // A handful of products the stores cannot serve is reported without failing
+  // the run; more than this many means something broader is wrong.
+  const maxRowFailures = parseNumberArg(args, "--max-row-failures", 25);
+  const maxStaleRows = parseNumberArg(args, "--max-stale", 25);
   const partialRun =
     targetShopId !== null || options.productId !== null || options.limit !== null;
 
@@ -652,6 +697,9 @@ async function main() {
     report.failures.map((failure) => `${SHOP_NAMES[report.shopId]}:${failure}`)
   );
   const stopped = groups.flatMap((group) => (group.stoppedReason ? [group.stoppedReason] : []));
+  const rowFailures = reports.flatMap((report) =>
+    report.rowFailures.map((failure) => `${SHOP_NAMES[report.shopId]}:${failure}`)
+  );
 
   const summary = [
     "### Batch price sync",
@@ -666,7 +714,8 @@ async function main() {
     }),
     `- Stopped early: ${stopped.length ? stopped.join(", ") : "no"}`,
     `- Failures: ${failures.length}${failures.length ? ` (${[...new Set(failures)].slice(0, 10).join(", ")})` : ""}`,
-    `- Visible prices older than ${maxAgeHours}h: ${dryRun || partialRun ? "not checked" : staleRows.length}`,
+    `- Products the store could not price: ${rowFailures.length}${rowFailures.length ? ` (${rowFailures.slice(0, 10).join(", ")})` : ""} (the run fails above ${maxRowFailures})`,
+    `- Visible prices older than ${maxAgeHours}h: ${dryRun || partialRun ? "not checked" : staleRows.length} (the run fails above ${maxStaleRows})`,
   ];
   console.log(summary.join("\n"));
   writeStepSummary(summary);
@@ -677,9 +726,13 @@ async function main() {
     );
   }
 
-  if (failures.length > 0 || staleRows.length > 0) {
+  if (
+    failures.length > 0 ||
+    rowFailures.length > maxRowFailures ||
+    staleRows.length > maxStaleRows
+  ) {
     throw new Error(
-      `Batch price sync needs attention: failures=${failures.length} stale=${staleRows.length}`
+      `Batch price sync needs attention: failures=${failures.length} rowFailures=${rowFailures.length} stale=${staleRows.length}`
     );
   }
 }
