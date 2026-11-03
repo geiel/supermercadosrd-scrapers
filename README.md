@@ -35,6 +35,14 @@ saved on the next run. Shopify-era `/products/<handle>` links are never matched
 by slug (many handles now point to another product): they are hidden until
 someone links them again. No secrets are needed.
 
+Catalog requests use `sort_order=created_at:asc` and verify that the API applied
+that order. Repeated product IDs, malformed references, failed pages and an
+unfinished traversal abort the run before database writes. The traversal ends
+on an empty page, not `pagination.total_pages` (Supermix caps that metadata at
+100 pages). Linked variants always get a detail request, including when their
+parent is absent from the listing; absence from the listing alone cannot hide
+a linked variant.
+
 The run fails, so GitHub sends a notification, when a request fails, a product
 needs attention (for example `multiple_variants`), or a visible Supermix price
 is older than 12 hours. Use `--dry-run` to fetch prices without writing, and

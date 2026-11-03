@@ -190,7 +190,12 @@ test("pages the catalog oldest first, 100 products per request", async () => {
   await withApi(
     (request) => {
       urls.push(request.url ?? "");
-      return { json: { products: [product("10")], pagination: { page: 3 } } };
+      const params = new URL(request.url!, "http://localhost").searchParams;
+      return { json: {
+        products: [product("10")],
+        sort: { current: params.get("sort_order") },
+        pagination: { page: 3 },
+      } };
     },
     async (config) => {
       const fetched = await fetchSupermixCatalogPage(3, config);
@@ -200,8 +205,20 @@ test("pages the catalog oldest first, 100 products per request", async () => {
   );
 
   assert.deepEqual(urls, [
-    "/api/storefront/v1/products?per_page=100&sort=created_at%3Aasc&page=3",
+    "/api/storefront/v1/products?per_page=100&sort_order=created_at%3Aasc&page=3",
   ]);
+});
+
+test("rejects a catalog response when Supermix ignores the requested sort", async () => {
+  await withApi(
+    () => ({ json: { products: [product("10")], sort: { current: null } } }),
+    async (config) => {
+      assert.deepEqual(await fetchSupermixCatalogPage(1, config), {
+        ok: false,
+        reason: "catalog_sort_not_applied",
+      });
+    }
+  );
 });
 
 test("treats a product 404 as gone, not as a request failure", async () => {
