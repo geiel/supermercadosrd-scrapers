@@ -96,6 +96,23 @@ test("a pack that became a single is refused even when no product holds the arti
     decideReplacement(evidence({ codes: ["91527"], previousBravoName: "BRAVO CHOCOLECHE 3 PACK 200 ML" }), single, false),
     { accept: false, reason: "pack_count_changed" }
   );
+  // A recorded Bravo name without a count still leaves our name and count in charge.
+  assert.deepEqual(
+    decideReplacement(
+      evidence({ codes: ["91527"], productName: "Bravo Chocoleche 3 Pack", previousBravoName: "BRAVO CHOCOLECHE 200 ML 3/1" }),
+      single,
+      false
+    ),
+    { accept: false, reason: "pack_count_changed" }
+  );
+  assert.deepEqual(
+    decideReplacement(
+      evidence({ codes: ["1"], presentation: "12 UND", previousBravoName: "VELAS BLANCAS" }),
+      article({ idexternoArticulo: "1", nombreArticulo: "VELAS BLANCAS 6 UN" }),
+      false
+    ),
+    { accept: false, reason: "pack_count_changed" }
+  );
   assert.deepEqual(
     decideReplacement(
       evidence({ codes: ["1"], presentation: "12 UND" }),

@@ -233,9 +233,9 @@ export function parsePackCount(text: string | null | undefined): number | null {
 
 function packConflict(evidence: BravoRelinkEvidence, article: BravoArticle) {
   const next = parsePackCount(article.nombreArticulo);
-  if (evidence.previousBravoName) {
-    const previous = parsePackCount(evidence.previousBravoName);
-    if (previous === null) return null;
+  // Bravo's old name decides when it states a count; otherwise fall through to ours.
+  const previous = parsePackCount(evidence.previousBravoName);
+  if (previous !== null) {
     if (next === null) return previous > 1 ? "pack_count_changed" : null;
     return previous === next ? null : "pack_count_changed";
   }
