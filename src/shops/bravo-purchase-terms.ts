@@ -6,6 +6,9 @@ import {
 import type { ScrapePriceInput } from "../types.js";
 
 type BravoPurchaseFields = {
+  idArticulo?: unknown;
+  idexternoArticulo?: unknown;
+  nombreArticulo?: unknown;
   idTipounidadArticulo?: unknown;
   mincantArticuloArticulo?: unknown;
   varcantArticuloArticulo?: unknown;
@@ -45,6 +48,12 @@ export function extractBravoPurchaseTerms(
       varcantArticuloArticulo: product.varcantArticuloArticulo,
       maxcantArticuloArticulo: product.maxcantArticuloArticulo,
       productUnit: input.presentation,
+      // Which Bravo article these terms came from. Lets the price job find the
+      // product again when Bravo re-lists it under a new idArticulo.
+      idArticulo: product.idArticulo,
+      idexternoArticulo:
+        product.idexternoArticulo === undefined ? undefined : String(product.idexternoArticulo),
+      nombreArticulo: product.nombreArticulo,
 
     },
   });

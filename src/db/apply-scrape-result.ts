@@ -12,6 +12,7 @@ import {
 import type { ScrapePriceResult, ScrapePriceSuccess } from "../types.js";
 import type { PurchaseTerms } from "../purchase-terms.js";
 import { revalidateProduct } from "./revalidate-product.js";
+import { relinkBravoOffer } from "./bravo-relink-offer.js";
 
 export type ShopPriceRow = Pick<
   ProductShopPriceRow,
@@ -108,7 +109,10 @@ async function hideProductPrice(row: ShopPriceRow) {
     .where(
       and(
         eq(productsShopsPrices.productId, row.productId),
-        eq(productsShopsPrices.shopId, row.shopId)
+        eq(productsShopsPrices.shopId, row.shopId),
+        // Hide only the offer that failed: if another run moved it to a new
+        // api meanwhile (a Bravo relink), that run's result stands.
+        sql`${productsShopsPrices.api} IS NOT DISTINCT FROM ${row.api ?? null}`
       )
     );
 
@@ -185,6 +189,21 @@ export async function applyScrapeResult(
     console.error(
       `[ERROR] ${result.shopName} ${logPrefix(row)} reason=${result.reason}`
     );
+
+    if (result.status === "not_found" && row.shopId === 6) {
+      const relink = await relinkBravoOffer(row).catch((error: unknown) => {
+        console.error(`[RELINK] bravo ${logPrefix(row)} failed`, error);
+        return { status: "not_relinked" } as const;
+      });
+      if (relink.status === "relinked") {
+        await applyScrapeResult({ ...row, api: relink.api }, relink.result);
+        return;
+      }
+      // Another run already moved this offer; hiding now would undo its work.
+      if (relink.status === "offer_changed") {
+        return;
+      }
+    }
 
     if (result.hide) {
       await hideProductPrice(row);
