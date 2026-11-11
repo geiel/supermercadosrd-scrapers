@@ -188,12 +188,16 @@ export async function applyScrapeResult(
     );
 
     if (result.status === "not_found" && row.shopId === 6) {
-      const relinked = await relinkBravoOffer(row).catch((error: unknown) => {
+      const relink = await relinkBravoOffer(row).catch((error: unknown) => {
         console.error(`[RELINK] bravo ${logPrefix(row)} failed`, error);
-        return null;
+        return { status: "not_relinked" } as const;
       });
-      if (relinked) {
-        await applyScrapeResult({ ...row, api: relinked.api }, relinked.result);
+      if (relink.status === "relinked") {
+        await applyScrapeResult({ ...row, api: relink.api }, relink.result);
+        return;
+      }
+      // Another run already moved this offer; hiding now would undo its work.
+      if (relink.status === "offer_changed") {
         return;
       }
     }

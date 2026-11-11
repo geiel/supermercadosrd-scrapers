@@ -13,8 +13,13 @@ export type BravoArticle = {
 
 export type BravoRelinkEvidence = {
   oldArticleId: number;
-  /** Bravo product codes known for this product (offer evidence and image URLs). */
+  /** Bravo product codes known for this product. */
   codes: string[];
+  /**
+   * Where the codes come from, strongest first: recorded for the failed article
+   * by the price job, visible product images, or only hidden product images.
+   */
+  codeSource: "recorded" | "images" | "hidden_images";
   /** Bravo's own name for the old article, when it was recorded. */
   previousBravoName: string | null;
   /** Bravo purchase type of the old article (1 unit, 2 weight), when recorded. */
@@ -48,6 +53,24 @@ export function bravoCodesFromImageUrls(urls: Array<string | null | undefined>) 
     }
   }
   return [...codes];
+}
+
+/**
+ * Which Bravo codes identify the product. A code recorded for the failed
+ * article is the only one used; otherwise visible images, and hidden images
+ * only as a last resort (decideReplacement then demands a barcode match).
+ */
+export function selectBravoCodes(input: {
+  recordedCode: string | null;
+  visibleImageCodes: string[];
+  hiddenImageCodes: string[];
+}): Pick<BravoRelinkEvidence, "codes" | "codeSource"> {
+  const recorded = input.recordedCode?.trim();
+  if (recorded) return { codes: [normalizeCode(recorded)], codeSource: "recorded" };
+  if (input.visibleImageCodes.length > 0) {
+    return { codes: input.visibleImageCodes, codeSource: "images" };
+  }
+  return { codes: input.hiddenImageCodes, codeSource: "hidden_images" };
 }
 
 export function bravoArticleIdFromApi(api: string | null | undefined) {
@@ -105,7 +128,7 @@ export function chooseReplacement(
   return { status: "candidate", article: matches[0] };
 }
 
-type Size = { dimension: "mass" | "volume"; quantity: number };
+type Size = { dimension: "mass" | "volume"; quantity: number; fromOunces: boolean };
 
 const UNIT_FACTORS: Record<string, Array<[Size["dimension"], number]>> = {
   KG: [["mass", 1000]],
@@ -139,20 +162,32 @@ export function parseSizes(text: string | null | undefined): Size[] {
     const amount = Number(match[1].replace(",", "."));
     if (!Number.isFinite(amount) || amount <= 0) continue;
     for (const [dimension, factor] of UNIT_FACTORS[match[2]] ?? []) {
-      sizes.push({ dimension, quantity: amount * factor });
+      sizes.push({ dimension, quantity: amount * factor, fromOunces: match[2].endsWith("Z") });
     }
   }
   return sizes;
 }
 
-function sizesAgree(left: Size[], right: Size[]) {
-  return left.some((a) =>
-    right.some(
-      (b) =>
-        a.dimension === b.dimension &&
-        Math.abs(a.quantity - b.quantity) / Math.max(a.quantity, b.quantity) <= 0.03
-    )
-  );
+function close(a: number, b: number) {
+  return Math.abs(a - b) / Math.max(a, b) <= 0.03;
+}
+
+/**
+ * true/false when the two sides can be compared, null when they cannot (one is
+ * a weight and the other a volume, e.g. 375 g of oil labelled 411 ml).
+ * Ounces may be fluid or weight, so they match either reading by number.
+ */
+function sizesAgree(left: Size[], right: Size[]): boolean | null {
+  let comparable = false;
+  for (const a of left) {
+    for (const b of right) {
+      if (a.dimension === b.dimension || a.fromOunces || b.fromOunces) {
+        comparable = true;
+        if (close(a.quantity, b.quantity)) return true;
+      }
+    }
+  }
+  return comparable ? false : null;
 }
 
 function sizeConflict(evidence: BravoRelinkEvidence, article: BravoArticle) {
@@ -162,13 +197,56 @@ function sizeConflict(evidence: BravoRelinkEvidence, article: BravoArticle) {
   // Bravo-to-Bravo first: its names can carry a wrong size, but the same one.
   const previous = parseSizes(evidence.previousBravoName);
   if (previous.length > 0) {
-    return sizesAgree(previous, newSizes) ? null : "size_differs_from_old_bravo_name";
+    return sizesAgree(previous, newSizes) === false ? "size_differs_from_old_bravo_name" : null;
   }
 
   const ours = parseSizes(evidence.presentation);
-  if (ours.length > 0 && !sizesAgree(ours, newSizes)) {
+  if (ours.length > 0 && sizesAgree(ours, newSizes) === false) {
     return "size_differs_from_product";
   }
+  return null;
+}
+
+// Units in a pack: "3 PACK", "PK 6", "X5", "6X55 ML", "24 UN". Bravo's
+// "24/1" supplier case notation is not a pack count and is ignored.
+const PACK_PATTERNS = [
+  /(\d+)\s*-?\s*(?:PACK|PK|MPK|PAQ)(?![A-Z])/,
+  /(?:^|[^A-Z])(?:PACK|PK|MPK)\s*(?:DE\s*)?(\d+)/,
+  /(?:^|[^A-Z0-9])X\s*(\d+)(?![\d.,]*\s*(?:KG|GRS|GR|G|LBS|LB|ONZ|OZ|ML|CC|CL|LTR|LT|L)(?![A-Z]))/,
+  /(?:^|[^0-9/])(\d+)\s*X\s*\d/,
+  /(?:^|[^0-9/])(\d+)\s*(?:UNIDADES|UNIDAD|UNDS|UND|UNID|UN|U|PZS|PZ)(?![A-Z])/,
+];
+
+export function parsePackCount(text: string | null | undefined): number | null {
+  if (!text) return null;
+  const upper = text
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+  for (const pattern of PACK_PATTERNS) {
+    const match = upper.match(pattern);
+    const count = match ? Number(match[1]) : NaN;
+    if (Number.isInteger(count) && count > 0) return count;
+  }
+  return null;
+}
+
+function packConflict(evidence: BravoRelinkEvidence, article: BravoArticle) {
+  const next = parsePackCount(article.nombreArticulo);
+  if (evidence.previousBravoName) {
+    const previous = parsePackCount(evidence.previousBravoName);
+    if (previous === null) return null;
+    if (next === null) return previous > 1 ? "pack_count_changed" : null;
+    return previous === next ? null : "pack_count_changed";
+  }
+
+  // Our name states a pack ("3 Pack") that Bravo's article no longer has.
+  const fromName = parsePackCount(evidence.productName);
+  if (fromName !== null && fromName > 1 && next !== fromName) return "pack_count_changed";
+  // Our measured count is only compared with a count Bravo states: Bravo often
+  // writes supplier cases ("4/1") or nothing for the same pack.
+  const measured = parsePackCount(evidence.presentation);
+  if (next !== null && measured !== null && next !== measured) return "pack_count_changed";
   return null;
 }
 
@@ -194,9 +272,15 @@ export function decideReplacement(
 
   const ours = new Set(evidence.globalIds.map(normalizeGlobalId).filter(Boolean));
   const eanMatch = (article.eans ?? []).some((ean) => ours.has(normalizeGlobalId(ean)));
-  const conflicts = [sizeConflict(evidence, article), purchaseTypeConflict(evidence, article)].filter(
-    (value): value is string => value !== null
-  );
+  const conflicts = [
+    sizeConflict(evidence, article),
+    packConflict(evidence, article),
+    purchaseTypeConflict(evidence, article),
+    // Codes from hidden images, or from images of several Bravo articles, are
+    // not trusted on their own.
+    evidence.codeSource === "hidden_images" ? "code_only_from_hidden_images" : null,
+    evidence.codeSource === "images" && evidence.codes.length > 1 ? "several_bravo_codes" : null,
+  ].filter((value): value is string => value !== null);
 
   if (conflicts.length > 0 && !eanMatch) {
     return { accept: false, reason: conflicts.join(",") };

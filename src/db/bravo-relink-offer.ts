@@ -8,9 +8,10 @@ import {
   bravoSearchQuery,
   chooseReplacement,
   decideReplacement,
+  selectBravoCodes,
   type BravoRelinkEvidence,
 } from "../bravo-relink.js";
-import { getBravoArticle, scrapeBravoPrice, searchBravoArticles } from "../shops/bravo.js";
+import { bravoPriceFromPayload, getBravoArticle, searchBravoArticles } from "../shops/bravo.js";
 import type { ScrapePriceSuccess } from "../types.js";
 
 const BRAVO_SHOP_ID = 6;
@@ -26,10 +27,15 @@ type RelinkRow = {
   purchaseUnit: string | null;
 };
 
-export type BravoRelinkResult = {
-  api: string;
-  result: ScrapePriceSuccess;
-};
+export type BravoRelinkOutcome =
+  /** The offer now points at the new article; apply this price to it. */
+  | { status: "relinked"; api: string; result: ScrapePriceSuccess }
+  /** Someone else changed the offer meanwhile; leave it alone. */
+  | { status: "offer_changed" }
+  /** No certain replacement; the caller hides the offer as before. */
+  | { status: "not_relinked" };
+
+const NOT_RELINKED: BravoRelinkOutcome = { status: "not_relinked" };
 
 function log(row: RelinkRow, message: string) {
   console.log(`[RELINK] bravo productId=${row.productId} ${message}`);
@@ -39,12 +45,14 @@ async function loadEvidence(row: RelinkRow, oldArticleId: number): Promise<Bravo
   const rows = await db.execute<{
     name: string | null;
     image: string | null;
-    images: string[] | null;
+    visibleImages: string[] | null;
+    hiddenImages: string[] | null;
     globalIds: string[] | null;
     evidence: Record<string, unknown> | null;
   }>(sql`
     select p.name, p.image,
-      (select json_agg(i."imageUrl") from product_images i where i."productId" = p.id) as "images",
+      (select json_agg(i."imageUrl") from product_images i where i."productId" = p.id and not i.hidden) as "visibleImages",
+      (select json_agg(i."imageUrl") from product_images i where i."productId" = p.id and i.hidden) as "hiddenImages",
       (select json_agg(g.value) from products_global_ids g where g."productId" = p.id) as "globalIds",
       x."purchaseTermsEvidence" as "evidence"
     from products p
@@ -55,20 +63,23 @@ async function loadEvidence(row: RelinkRow, oldArticleId: number): Promise<Bravo
   if (!record) return null;
 
   const evidence = record.evidence ?? {};
-  // The recorded code only counts when it belongs to the article that just failed.
+  // What the price job recorded counts only for the article that just failed,
+  // and then it is the only code used.
   const recordedForOldArticle = Number(evidence.idArticulo) === oldArticleId;
-  const recordedCode =
-    recordedForOldArticle && evidence.idexternoArticulo != null
-      ? [String(evidence.idexternoArticulo)]
-      : [];
-  const codes = [
-    ...new Set([...recordedCode, ...bravoCodesFromImageUrls([record.image, ...(record.images ?? [])])]),
-  ];
+  const { codes, codeSource } = selectBravoCodes({
+    recordedCode:
+      recordedForOldArticle && evidence.idexternoArticulo != null
+        ? String(evidence.idexternoArticulo)
+        : null,
+    visibleImageCodes: bravoCodesFromImageUrls([record.image, ...(record.visibleImages ?? [])]),
+    hiddenImageCodes: bravoCodesFromImageUrls(record.hiddenImages ?? []),
+  });
   const previousType = Number(evidence.idTipounidadArticulo);
 
   return {
     oldArticleId,
     codes,
+    codeSource,
     previousBravoName:
       recordedForOldArticle && typeof evidence.nombreArticulo === "string"
         ? evidence.nombreArticulo
@@ -81,15 +92,13 @@ async function loadEvidence(row: RelinkRow, oldArticleId: number): Promise<Bravo
   };
 }
 
-async function linkedToAnotherProduct(productId: number, articleId: number) {
-  const rows = await db.execute(sql`
+type Executor = Pick<typeof db, "execute">;
+
+async function articleOnAnotherProduct(client: Executor, productId: number, articleId: number) {
+  const rows = await client.execute(sql`
     select 1 from products_shops_prices
     where "shopId" = ${BRAVO_SHOP_ID} and "productId" <> ${productId}
-      and substring(api from '[?&]idArticulo=([0-9]+)') = ${String(articleId)}
-    union all
-    select 1 from product_retailer_identifiers
-    where "shopId" = ${BRAVO_SHOP_ID} and "productId" <> ${productId}
-      and "normalizedSku" = ${String(articleId)} and active
+      and substring(api from '[?&]idArticulo=([0-9]+)(&|$)') = ${String(articleId)}
     limit 1
   `);
   return rows.length > 0;
@@ -98,24 +107,24 @@ async function linkedToAnotherProduct(productId: number, articleId: number) {
 /**
  * Called when Bravo answers that the offer's article no longer exists. Looks for
  * the same product under a new idArticulo and, when it is certain, points the
- * offer at it. Returns null when the offer should be hidden as before.
+ * offer at it.
  */
-export async function relinkBravoOffer(row: RelinkRow): Promise<BravoRelinkResult | null> {
-  if (row.shopId !== BRAVO_SHOP_ID) return null;
-  const oldArticleId = bravoArticleIdFromApi(row.api);
-  if (oldArticleId === null) return null;
+export async function relinkBravoOffer(row: RelinkRow): Promise<BravoRelinkOutcome> {
+  if (row.shopId !== BRAVO_SHOP_ID || !row.api) return NOT_RELINKED;
+  const oldApi = row.api;
+  const oldArticleId = bravoArticleIdFromApi(oldApi);
+  if (oldArticleId === null) return NOT_RELINKED;
 
   const evidence = await loadEvidence(row, oldArticleId);
   if (!evidence || evidence.codes.length === 0) {
     log(row, `old=${oldArticleId} skip=no_bravo_code`);
-    return null;
+    return NOT_RELINKED;
   }
 
-  const query = bravoSearchQuery(evidence);
-  const results = await searchBravoArticles(query);
+  const results = await searchBravoArticles(bravoSearchQuery(evidence));
   if (results === null) {
     log(row, `old=${oldArticleId} skip=search_failed`);
-    return null;
+    return NOT_RELINKED;
   }
 
   const choice = chooseReplacement(evidence, results);
@@ -125,23 +134,30 @@ export async function relinkBravoOffer(row: RelinkRow): Promise<BravoRelinkResul
       `old=${oldArticleId} skip=${choice.status}` +
         (choice.status === "ambiguous" ? ` candidates=${choice.articleIds.join(",")}` : "")
     );
-    return null;
+    return NOT_RELINKED;
   }
 
-  // The search summary has no barcodes; the article itself does.
-  const article = (await getBravoArticle(choice.article.idArticulo)) ?? choice.article;
+  // The search summary has no barcodes or prices; the article itself has both.
+  const fetched = await getBravoArticle(choice.article.idArticulo);
+  if (!fetched || fetched.article.idArticulo !== choice.article.idArticulo) {
+    log(row, `old=${oldArticleId} new=${choice.article.idArticulo} skip=article_fetch_failed`);
+    return NOT_RELINKED;
+  }
+  const article = fetched.article;
+  const newArticleId = article.idArticulo;
+
   const decision = decideReplacement(
     evidence,
     article,
-    await linkedToAnotherProduct(row.productId, article.idArticulo)
+    await articleOnAnotherProduct(db, row.productId, newArticleId)
   );
   if (!decision.accept) {
-    log(row, `old=${oldArticleId} new=${article.idArticulo} skip=${decision.reason} name="${article.nombreArticulo}"`);
-    return null;
+    log(row, `old=${oldArticleId} new=${newArticleId} skip=${decision.reason} name="${article.nombreArticulo}"`);
+    return NOT_RELINKED;
   }
 
-  const api = bravoArticleApi(article.idArticulo);
-  const result = await scrapeBravoPrice({
+  const api = bravoArticleApi(newArticleId);
+  const result = bravoPriceFromPayload(fetched.payload, {
     shopId: BRAVO_SHOP_ID,
     url: row.url,
     api,
@@ -151,29 +167,43 @@ export async function relinkBravoOffer(row: RelinkRow): Promise<BravoRelinkResul
     purchaseUnit: row.purchaseUnit,
   });
   if (result.status !== "ok") {
-    log(row, `old=${oldArticleId} new=${article.idArticulo} skip=new_article_${result.reason}`);
-    return null;
+    log(row, `old=${oldArticleId} new=${newArticleId} skip=new_article_${result.reason}`);
+    return NOT_RELINKED;
   }
 
-  const updated = await db
-    .update(productsShopsPrices)
-    .set({ api })
-    .where(
-      and(
-        eq(productsShopsPrices.productId, row.productId),
-        eq(productsShopsPrices.shopId, BRAVO_SHOP_ID),
-        eq(productsShopsPrices.api, row.api!)
+  // One article, one product: serialize claims on the article and check again
+  // inside the transaction before switching the offer.
+  const claim = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${BRAVO_SHOP_ID}::int, ${newArticleId}::int)`);
+    if (await articleOnAnotherProduct(tx, row.productId, newArticleId)) {
+      return "article_claimed" as const;
+    }
+    const updated = await tx
+      .update(productsShopsPrices)
+      .set({ api })
+      .where(
+        and(
+          eq(productsShopsPrices.productId, row.productId),
+          eq(productsShopsPrices.shopId, BRAVO_SHOP_ID),
+          eq(productsShopsPrices.api, oldApi)
+        )
       )
-    )
-    .returning({ productId: productsShopsPrices.productId });
-  if (updated.length === 0) {
-    log(row, `old=${oldArticleId} new=${article.idArticulo} skip=offer_changed_meanwhile`);
-    return null;
+      .returning({ productId: productsShopsPrices.productId });
+    return updated.length > 0 ? ("claimed" as const) : ("offer_changed" as const);
+  });
+
+  if (claim === "offer_changed") {
+    log(row, `old=${oldArticleId} new=${newArticleId} skip=offer_changed_meanwhile`);
+    return { status: "offer_changed" };
+  }
+  if (claim === "article_claimed") {
+    log(row, `old=${oldArticleId} new=${newArticleId} skip=article_linked_to_another_product`);
+    return NOT_RELINKED;
   }
 
   log(
     row,
-    `old=${oldArticleId} new=${article.idArticulo} code=${article.idexternoArticulo} reason=${decision.reason} name="${article.nombreArticulo}"`
+    `old=${oldArticleId} new=${newArticleId} code=${article.idexternoArticulo} reason=${decision.reason} name="${article.nombreArticulo}"`
   );
-  return { api, result };
+  return { status: "relinked", api, result };
 }

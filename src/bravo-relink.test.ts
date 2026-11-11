@@ -7,7 +7,9 @@ import {
   bravoSearchQuery,
   chooseReplacement,
   decideReplacement,
+  parsePackCount,
   parseSizes,
+  selectBravoCodes,
   type BravoArticle,
   type BravoRelinkEvidence,
 } from "./bravo-relink.js";
@@ -16,6 +18,7 @@ function evidence(overrides: Partial<BravoRelinkEvidence>): BravoRelinkEvidence 
   return {
     oldArticleId: 1,
     codes: [],
+    codeSource: "images",
     previousBravoName: null,
     previousPurchaseType: null,
     purchaseMode: "unit",
@@ -80,6 +83,81 @@ test("ignores the old article and refuses two articles with the same code", () =
       article({ idArticulo: 32494, idexternoArticulo: "097235" }),
     ]),
     { status: "ambiguous", articleIds: [32493, 32494] }
+  );
+});
+
+test("a pack that became a single is refused even when no product holds the article", () => {
+  const single = article({ idArticulo: 30691, idexternoArticulo: "91527", nombreArticulo: "BRAVO CHOCOLECHE 200 ML" });
+  assert.deepEqual(
+    decideReplacement(evidence({ codes: ["91527"], productName: "Bravo Chocoleche 3 Pack", presentation: "200 ML" }), single, false),
+    { accept: false, reason: "pack_count_changed" }
+  );
+  assert.deepEqual(
+    decideReplacement(evidence({ codes: ["91527"], previousBravoName: "BRAVO CHOCOLECHE 3 PACK 200 ML" }), single, false),
+    { accept: false, reason: "pack_count_changed" }
+  );
+  assert.deepEqual(
+    decideReplacement(
+      evidence({ codes: ["1"], presentation: "12 UND" }),
+      article({ idexternoArticulo: "1", nombreArticulo: "VELAS BLANCAS 6 UN" }),
+      false
+    ),
+    { accept: false, reason: "pack_count_changed" }
+  );
+});
+
+test("supplier cases, weight vs volume and fluid ounces are not conflicts", () => {
+  const accept = (ev: Partial<BravoRelinkEvidence>, name: string) =>
+    decideReplacement(evidence({ codes: ["1"], ...ev }), article({ idexternoArticulo: "1", nombreArticulo: name }), false).accept;
+  assert.equal(accept({ presentation: "4 UND", productName: "Hamburguesa De Res Y Angus" }, "HAMBURGUESA DE RES Y ANGUS CONG 4/1"), true);
+  assert.equal(accept({ presentation: "2 UND" }, "JAG ENVASE P/ALIMENTO 2PZ REDON 0659"), true);
+  assert.equal(accept({ presentation: "411 ML" }, "FIGARO ACEITE OLIVA LATA 375 GR"), true);
+  assert.equal(accept({ presentation: "650 GR" }, "NESTLE COFFEE MATE 22 OZ"), true);
+});
+
+test("reads pack counts but not Bravo's supplier case notation", () => {
+  assert.equal(parsePackCount("BRAVO CHOCOLECHE 3 PACK 200 ML"), 3);
+  assert.equal(parsePackCount("MAGNUM ICE MINI ALMOND MPK 6X6X55 ML"), 6);
+  assert.equal(parsePackCount("Desodorante Speed Stick Para Hombre En Spray X5"), 5);
+  assert.equal(parsePackCount("IA TOALLITAS DESMAQUILLANTES 3EN1 24 UN"), 24);
+  assert.equal(parsePackCount("LIMPPANO ESPONJA ANTIADERENTE 60/1 UN"), null);
+  assert.equal(parsePackCount("GOMA GRECA 06 TAZAS (2/1) 6690"), null);
+  assert.equal(parsePackCount("BRAVO CREMA BATIDA SPRAY 250 GR"), null);
+  assert.equal(parsePackCount("ACEITE X 500 ML"), null);
+});
+
+test("a recorded code is the only one used; hidden images are a last resort", () => {
+  assert.deepEqual(
+    selectBravoCodes({ recordedCode: "097235", visibleImageCodes: ["11111"], hiddenImageCodes: ["22222"] }),
+    { codes: ["97235"], codeSource: "recorded" }
+  );
+  assert.deepEqual(
+    selectBravoCodes({ recordedCode: null, visibleImageCodes: ["11111"], hiddenImageCodes: ["22222"] }),
+    { codes: ["11111"], codeSource: "images" }
+  );
+  assert.deepEqual(
+    selectBravoCodes({ recordedCode: null, visibleImageCodes: [], hiddenImageCodes: ["22222"] }),
+    { codes: ["22222"], codeSource: "hidden_images" }
+  );
+});
+
+test("a code only from hidden images, or several codes, needs a matching barcode", () => {
+  const next = article({ idArticulo: 31399, idexternoArticulo: "54098", nombreArticulo: "ACT II POP CORN BUTTER 91 GR", eans: ["076150601336"] });
+  assert.deepEqual(
+    decideReplacement(evidence({ codes: ["54098"], codeSource: "hidden_images", presentation: "91 GR" }), next, false),
+    { accept: false, reason: "code_only_from_hidden_images" }
+  );
+  assert.deepEqual(
+    decideReplacement(
+      evidence({ codes: ["54098"], codeSource: "hidden_images", presentation: "91 GR", globalIds: ["76150601336"] }),
+      next,
+      false
+    ),
+    { accept: true, reason: "same_code_and_barcode" }
+  );
+  assert.deepEqual(
+    decideReplacement(evidence({ codes: ["54098", "99999"], presentation: "91 GR" }), next, false),
+    { accept: false, reason: "several_bravo_codes" }
   );
 });
 

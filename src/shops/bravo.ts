@@ -70,6 +70,14 @@ export async function scrapeBravoPrice(
     return error(shopId, "invalid_json", true, true);
   }
 
+  return bravoPriceFromPayload(jsonResponse, input);
+}
+
+/** Price result from one /articulo/get payload (shared with the relink step). */
+export function bravoPriceFromPayload(
+  jsonResponse: unknown,
+  input: ScrapePriceInput
+): ScrapePriceResult {
   const parsed = productSchema.safeParse(jsonResponse);
   if (!parsed.success) {
     return error(shopId, "invalid_payload", false, true);
@@ -159,16 +167,18 @@ export async function searchBravoArticles(
     .filter((article): article is BravoArticle => article !== null);
 }
 
+/** One article: its identity plus the raw payload, so the price can reuse it. */
 export async function getBravoArticle(
   articleId: number,
   requestConfig?: FetchWithRetryConfig
-): Promise<BravoArticle | null> {
+): Promise<{ article: BravoArticle; payload: unknown } | null> {
   const response = await fetchWithRetry(
     bravoArticleApi(articleId),
     { headers: getBravoHeaders() },
     requestConfig
   );
   if (!response) return null;
-  const json = (await response.json().catch(() => null)) as { data?: unknown } | null;
-  return json?.data ? toBravoArticle(json.data) : null;
+  const payload = (await response.json().catch(() => null)) as { data?: unknown } | null;
+  const article = payload?.data ? toBravoArticle(payload.data) : null;
+  return article ? { article, payload } : null;
 }
