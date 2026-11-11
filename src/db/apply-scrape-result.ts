@@ -12,6 +12,7 @@ import {
 import type { ScrapePriceResult, ScrapePriceSuccess } from "../types.js";
 import type { PurchaseTerms } from "../purchase-terms.js";
 import { revalidateProduct } from "./revalidate-product.js";
+import { relinkBravoOffer } from "./bravo-relink-offer.js";
 
 export type ShopPriceRow = Pick<
   ProductShopPriceRow,
@@ -185,6 +186,17 @@ export async function applyScrapeResult(
     console.error(
       `[ERROR] ${result.shopName} ${logPrefix(row)} reason=${result.reason}`
     );
+
+    if (result.status === "not_found" && row.shopId === 6) {
+      const relinked = await relinkBravoOffer(row).catch((error: unknown) => {
+        console.error(`[RELINK] bravo ${logPrefix(row)} failed`, error);
+        return null;
+      });
+      if (relinked) {
+        await applyScrapeResult({ ...row, api: relinked.api }, relinked.result);
+        return;
+      }
+    }
 
     if (result.hide) {
       await hideProductPrice(row);

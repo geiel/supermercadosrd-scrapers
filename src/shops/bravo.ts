@@ -7,12 +7,19 @@ import type {
   ScrapePriceResult,
 } from "../types.js";
 import { extractBravoPurchaseTerms } from "./bravo-purchase-terms.js";
+import { bravoArticleApi, type BravoArticle } from "../bravo-relink.js";
 
 const shopId = 6;
 
 const productSchema = z
   .object({
     data: z.object({
+      idArticulo: z.number().optional(),
+      idexternoArticulo: z.union([z.string(), z.number()]).optional(),
+      nombreArticulo: z.string().optional(),
+      associatedEan: z
+        .array(z.object({ idEan: z.union([z.string(), z.number()]) }))
+        .optional(),
       idTipounidadArticulo: z.unknown().optional(),
       mincantArticuloArticulo: z.unknown().optional(),
       varcantArticuloArticulo: z.unknown().optional(),
@@ -95,4 +102,73 @@ export async function scrapeBravoPrice(
     undefined,
     purchaseTerms
   );
+}
+
+const BRAVO_API = "https://bravova-api.superbravo.com.do";
+
+const articleSummarySchema = z.object({
+  idArticulo: z.number(),
+  idexternoArticulo: z.union([z.string(), z.number()]),
+  nombreArticulo: z.string(),
+  idTipounidadArticulo: z.number().nullish(),
+  associatedEan: z
+    .array(z.object({ idEan: z.union([z.string(), z.number()]) }))
+    .nullish(),
+});
+
+const searchSchema = z.object({
+  data: z.object({ list: z.array(z.unknown()) }),
+});
+
+function toBravoArticle(value: unknown): BravoArticle | null {
+  const parsed = articleSummarySchema.safeParse(value);
+  if (!parsed.success) return null;
+  const article = parsed.data;
+  return {
+    idArticulo: article.idArticulo,
+    idexternoArticulo: String(article.idexternoArticulo),
+    nombreArticulo: article.nombreArticulo,
+    idTipounidadArticulo: article.idTipounidadArticulo ?? null,
+    eans: (article.associatedEan ?? []).map((ean) => String(ean.idEan)),
+  };
+}
+
+/** One page of Bravo's fuzzy name search (words are OR-ed, best score first). */
+export async function searchBravoArticles(
+  query: string,
+  requestConfig?: FetchWithRetryConfig
+): Promise<BravoArticle[] | null> {
+  if (!query.trim()) return [];
+  const params = new URLSearchParams({
+    "model.nombreArticulo": query,
+    paginationMaxItems: "100",
+    paginationOffset: "0",
+    showOrder: "score",
+  });
+  const response = await fetchWithRetry(
+    `${BRAVO_API}/public/articulo/search?${params}`,
+    { headers: getBravoHeaders() },
+    requestConfig
+  );
+  if (!response) return null;
+  const json: unknown = await response.json().catch(() => null);
+  const parsed = searchSchema.safeParse(json);
+  if (!parsed.success) return null;
+  return parsed.data.data.list
+    .map(toBravoArticle)
+    .filter((article): article is BravoArticle => article !== null);
+}
+
+export async function getBravoArticle(
+  articleId: number,
+  requestConfig?: FetchWithRetryConfig
+): Promise<BravoArticle | null> {
+  const response = await fetchWithRetry(
+    bravoArticleApi(articleId),
+    { headers: getBravoHeaders() },
+    requestConfig
+  );
+  if (!response) return null;
+  const json = (await response.json().catch(() => null)) as { data?: unknown } | null;
+  return json?.data ? toBravoArticle(json.data) : null;
 }
