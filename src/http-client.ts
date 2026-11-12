@@ -1,5 +1,5 @@
 import type { Browser, Page } from "puppeteer-core";
-import { PLAZA_LAMA_DPL_API_KEY } from "./api-endpoints.js";
+import { requiredApiEndpoint } from "./env.js";
 import type { FetchWithRetryConfig, ShopId } from "./types.js";
 
 export type FetchFailureReason =
@@ -397,7 +397,7 @@ export function getPlazaLamaHeaders(): Record<string, string> {
     "apollographql-client-version": clientVersion,
     "client-name": "e-commerce Moira Engine PLAZA_LAMA",
     "client-version": clientVersion,
-    "dpl-api-key": PLAZA_LAMA_DPL_API_KEY,
+    "dpl-api-key": requiredApiEndpoint("PLAZA_LAMA_DPL_API_KEY"),
     "sec-fetch-dest": "empty",
     "sec-fetch-mode": "cors",
     "sec-fetch-site": "cross-site",
