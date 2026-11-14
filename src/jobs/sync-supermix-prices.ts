@@ -8,10 +8,12 @@ import { products, productsShopsPrices } from "../db/schema.js";
 import { error, notFound } from "../result.js";
 import {
   SUPERMIX_SHOP_ID,
+  extractSupermixPurchaseTerms,
   fetchSupermixCatalogPage,
   fetchSupermixProduct,
   getSupermixApiConfig,
   isLegacySupermixUrl,
+  isSupermixWeightCandidate,
   parseSupermixReference,
   parseSupermixSlug,
   toSupermixPriceResult,
@@ -161,6 +163,26 @@ async function findStaleVisibleRows(maxAgeHours: number) {
     .orderBy(sql`${productsShopsPrices.updateAt} asc nulls first`);
 }
 
+/** Offers nobody has given purchase terms yet; existing terms are never replaced. */
+function needsPurchaseTerms(row: ShopPriceRow) {
+  return !row.purchaseMode && !row.purchaseUnit && !row.purchaseTermsSource;
+}
+
+/** Adds the detail payload's purchase terms to a price read from it, when the offer has none. */
+function withPurchaseTerms(
+  row: ShopPriceRow,
+  result: ScrapePriceResult,
+  product: unknown,
+  variantId: string | null = null
+): ScrapePriceResult {
+  if (result.status !== "ok" || !needsPurchaseTerms(row)) {
+    return result;
+  }
+
+  const purchaseTerms = extractSupermixPurchaseTerms(product, result.currentPrice, variantId);
+  return purchaseTerms ? { ...result, purchaseTerms } : result;
+}
+
 function describeResult(result: ScrapePriceResult) {
   return result.status === "ok" ? "ok" : `${result.status}:${result.reason}`;
 }
@@ -180,6 +202,8 @@ async function main() {
   const maxAgeHours = parseNumberArg(args, "--max-age-hours", 12);
   const concurrency = parseNumberArg(args, "--concurrency", 4);
   const maxLookups = parseNumberArg(args, "--max-lookups", 300);
+  // Detail requests for offers still missing purchase terms (see below).
+  const maxTermsLookups = parseNumberArg(args, "--max-terms-lookups", 100);
   const targetProductId = parseOptionalIntegerArg(args, "--product-id");
   const limit = parseOptionalIntegerArg(args, "--limit");
   const partialRun = targetProductId !== null || limit !== null;
@@ -281,16 +305,21 @@ async function main() {
     }
 
     for (const row of linkedRows) {
-      results.set(row, toSupermixPriceResult(product, parseSupermixReference(row.api)!.variantId));
+      const variantId = parseSupermixReference(row.api)!.variantId;
+      results.set(row, withPurchaseTerms(row, toSupermixPriceResult(product, variantId), product, variantId));
     }
   }
 
   const missing: ShopPriceRow[] = [];
+  const termsCandidates: ShopPriceRow[] = [];
   for (const [row, { id, slug }] of references) {
     // Once a row has a product id, a slug match could be a different product.
     const product = id ? productsById.get(id) : productsBySlug.get(slug!);
     if (product) {
       results.set(row, toSupermixPriceResult(product));
+      if (needsPurchaseTerms(row) && isSupermixWeightCandidate(product)) {
+        termsCandidates.push(row);
+      }
       const productId = productIdOf(product);
       if (productId && productId !== row.api) {
         if (!dryRun) {
@@ -328,13 +357,51 @@ async function main() {
       continue;
     }
 
-    results.set(row, toSupermixPriceResult(fetched.product));
+    results.set(row, withPurchaseTerms(row, toSupermixPriceResult(fetched.product), fetched.product));
     const productId = productIdOf(fetched.product);
     if (productId && productId !== row.api) {
       if (!dryRun) {
         await persistProductId(row, productId);
       }
       row.api = productId;
+    }
+  }
+
+  // The listing has no weight fields, so an offer that may be sold by weight
+  // and has no purchase terms yet gets one detail request. Once its terms are
+  // saved (per pound or per unit) it is not requested again. These requests
+  // only add terms: a failure keeps the listing price and does not fail the run.
+  // A failed request (usually throttling, after its retries) ends the lookups
+  // so the prices are still saved within the job's time limit; the rest wait
+  // for the next run.
+  let termsLookups = 0;
+  let termsFailures = 0;
+  let termsFound = 0;
+  for (const row of termsCandidates) {
+    if (termsLookups >= maxTermsLookups) {
+      break;
+    }
+
+    const productId = parseSupermixReference(row.api)?.productId;
+    if (!productId) {
+      continue;
+    }
+
+    termsLookups += 1;
+    await paceRequest();
+    const fetched = await fetchSupermixProduct(productId, config);
+    if (!fetched.ok) {
+      termsFailures += 1;
+      break;
+    }
+    if (fetched.product === null) {
+      continue;
+    }
+
+    const result = withPurchaseTerms(row, toSupermixPriceResult(fetched.product), fetched.product);
+    if (result.status === "ok" && result.purchaseTerms) {
+      termsFound += 1;
+      results.set(row, result);
     }
   }
 
@@ -349,7 +416,10 @@ async function main() {
       console.log(
         `[DRY RUN] productId=${row.productId} api=${row.api} ${describeResult(result)}` +
           (result.status === "ok"
-            ? ` currentPrice=${result.currentPrice} regularPrice=${result.regularPrice ?? "-"} previous=${row.currentPrice ?? "-"}/${row.regularPrice ?? "-"}`
+            ? ` currentPrice=${result.currentPrice} regularPrice=${result.regularPrice ?? "-"} previous=${row.currentPrice ?? "-"}/${row.regularPrice ?? "-"}` +
+              (result.purchaseTerms
+                ? ` purchaseTerms=${result.purchaseTerms.mode}:${result.purchaseTerms.unit} min=${result.purchaseTerms.minimum} step=${result.purchaseTerms.increment}`
+                : "")
             : "")
       );
     }
@@ -371,6 +441,7 @@ async function main() {
     "",
     `- Rows: ${rows.length}`,
     `- Requests: ${requestCount} (${catalogPages} catalog pages, ${productsById.size} catalog products, ${variantLookups} variant products, ${lookups} lookups)`,
+    `- Purchase terms: ${termsFound} saved from ${termsLookups} detail requests (${termsCandidates.length} candidates, ${termsFailures} failed)`,
     `- Request failures: ${requestFailures.length}${requestFailures.length ? ` (${requestFailures.join(", ")})` : ""}`,
     ...[...outcomeCounts.entries()]
       .sort((a, b) => b[1] - a[1])

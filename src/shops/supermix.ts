@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { buildPurchaseTerms, type PurchaseTerms } from "../purchase-terms.js";
 import { error, notFound, ok } from "../result.js";
 import type {
   FetchWithRetryConfig,
@@ -165,6 +166,140 @@ function toPrice(
       : null;
 
   return ok(shopId, currentPrice, regularPrice, null, buildSupermixProductUrl(slug));
+}
+
+export const SUPERMIX_PURCHASE_TERMS_SOURCE = "supermix_vendabo_product";
+
+const listingTermsSchema = z.object({
+  quick_add_variant_id: z.number().nullable(),
+  pricing: z.object({ price_from: z.boolean() }),
+});
+
+/**
+ * Whether a listing product may be sold by weight. Weighed products cannot be
+ * quick-added (the shopper must pick a weight), so the listing leaves
+ * `quick_add_variant_id` empty for them; products with a fixed price per unit
+ * carry one. The listing has no weight fields, so only these candidates need
+ * the detail payload to learn their purchase terms.
+ */
+export function isSupermixWeightCandidate(listingProduct: unknown) {
+  const parsed = listingTermsSchema.safeParse(listingProduct);
+  return parsed.success && parsed.data.quick_add_variant_id === null && !parsed.data.pricing.price_from;
+}
+
+const detailTermsSchema = z.object({
+  id: z.number(),
+  title: z.string(),
+  supermarket: z.object({ weight_unit: z.string().nullable().optional() }).nullable().optional(),
+  variants: z.array(
+    z.object({
+      id: z.number(),
+      sku: z.string().nullable().optional(),
+      pricing: z.object({ price: moneySchema.nullable() }),
+      supermarket: z
+        .object({
+          variable_weight: z.boolean(),
+          price_per_unit: moneySchema.nullable().optional(),
+          minimum_weight: z.number().nullable().optional(),
+          weight_step: z.number().nullable().optional(),
+        })
+        .nullable()
+        .optional(),
+    })
+  ),
+});
+
+function toAmount(value: string | null | undefined) {
+  const amount = Number(value);
+  return value && Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
+/**
+ * Purchase terms from a product detail payload, for the price that will be
+ * saved with them (`shownPrice`). A variable-weight variant is priced per pound
+ * (or kilogram) with the store's minimum and step; deli items have no fixed
+ * step, so their minimum is used as the step. A variant with no weight data is
+ * sold per unit. Returns undefined when the payload is unclear.
+ */
+export function extractSupermixPurchaseTerms(
+  product: unknown,
+  shownPrice: string,
+  variantId: string | null = null
+): PurchaseTerms | undefined {
+  const parsed = detailTermsSchema.safeParse(product);
+  if (!parsed.success) {
+    return undefined;
+  }
+
+  const { variants } = parsed.data;
+  const variant =
+    variantId === null
+      ? variants.length === 1
+        ? variants[0]
+        : undefined
+      : variants.find((item) => String(item.id) === variantId);
+  if (!variant) {
+    return undefined;
+  }
+
+  const evidence = {
+    productId: parsed.data.id,
+    variantId: variant.id,
+    sku: variant.sku ?? null,
+    title: parsed.data.title,
+  };
+
+  const weight = variant.supermarket;
+  const productWeight = parsed.data.supermarket;
+  const unit = productWeight?.weight_unit?.trim().toLowerCase() || null;
+  // Unit products send `supermarket: null` on both the product (or a null
+  // weight unit) and the variant. Omitted fields, or a weight unit without the
+  // variant's flag, are an incomplete payload and give no terms.
+  const soldPerUnit = weight
+    ? weight.variable_weight === false
+    : weight === null && (productWeight === null || productWeight?.weight_unit === null);
+  if (soldPerUnit) {
+    return buildPurchaseTerms({
+      mode: "unit",
+      unit: "UND",
+      minimum: 1,
+      increment: 1,
+      source: SUPERMIX_PURCHASE_TERMS_SOURCE,
+      evidence: { ...evidence, variableWeight: false },
+    });
+  }
+
+  if (!weight?.variable_weight || (unit !== "lb" && unit !== "kg")) {
+    return undefined;
+  }
+
+  // The saved price and the variant's price must both be the per-weight
+  // price, or the reference is unclear.
+  const pricePerUnit = weight.price_per_unit?.amount;
+  const perUnit = toAmount(pricePerUnit);
+  const prices = [toAmount(shownPrice), toAmount(variant.pricing.price?.amount)];
+  if (!perUnit || prices.some((price) => !price || Math.abs(price - perUnit) > 0.005)) {
+    return undefined;
+  }
+
+  const minimum = weight.minimum_weight ?? 0;
+  const step = weight.weight_step ?? 0;
+  return buildPurchaseTerms({
+    mode: "measure",
+    unit: unit.toUpperCase(),
+    minimum,
+    increment: step > 0 ? step : minimum,
+    priceReferenceQuantity: 1,
+    source: SUPERMIX_PURCHASE_TERMS_SOURCE,
+    evidence: {
+      ...evidence,
+      variableWeight: true,
+      pricePerUnit,
+      minimumWeight: weight.minimum_weight ?? null,
+      weightStep: weight.weight_step ?? null,
+      weightUnit: unit,
+    },
+  });
 }
 
 type ApiResponse =

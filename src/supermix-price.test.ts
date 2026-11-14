@@ -4,9 +4,11 @@ import type { AddressInfo } from "node:net";
 import test from "node:test";
 
 import {
+  extractSupermixPurchaseTerms,
   fetchSupermixCatalogPage,
   fetchSupermixProduct,
   isLegacySupermixUrl,
+  isSupermixWeightCandidate,
   parseSupermixReference,
   parseSupermixSlug,
   toSupermixPriceResult,
@@ -252,4 +254,126 @@ test("does not retry forbidden requests", async () => {
   );
 
   assert.equal(calls, 1);
+});
+
+// Shapes copied from the live product API (filete de pechuga Cibao, deli cheese).
+function weighedDetail({
+  price = "169.00",
+  pricePerUnit = price,
+  minimum = 1.5,
+  step = 1.5,
+  unit = "lb",
+  variableWeight = true,
+}: {
+  price?: string;
+  pricePerUnit?: string;
+  minimum?: number;
+  step?: number;
+  unit?: string;
+  variableWeight?: boolean;
+} = {}) {
+  return {
+    id: 831473,
+    slug: "filete-de-pechuga-fresca-c-b",
+    title: "FILETE DE PECHUGA  FRESCA C/B",
+    in_stock: true,
+    pricing: { price: { amount: price }, original_price: null, price_from: false },
+    supermarket: { weight_unit: unit, other_preparation: "Otro" },
+    variants: [
+      {
+        id: 1314335,
+        sku: "002019",
+        in_stock: true,
+        pricing: { price: { amount: price }, original_price: null },
+        supermarket: {
+          variable_weight: variableWeight,
+          price_per_unit: { amount: pricePerUnit, formatted: `RD$ ${pricePerUnit}` },
+          average_weight_per_unit: 0,
+          weight_step: step,
+          minimum_weight: minimum,
+        },
+      },
+    ],
+  };
+}
+
+test("only listing products without quick add may be sold by weight", () => {
+  const listing = (quickAdd: number | null, priceFrom = false) => ({
+    ...product("169.00", { priceFrom }),
+    quick_add_variant_id: quickAdd,
+  });
+  assert.equal(isSupermixWeightCandidate(listing(null)), true);
+  assert.equal(isSupermixWeightCandidate(listing(1303526)), false);
+  assert.equal(isSupermixWeightCandidate(listing(null, true)), false);
+  assert.equal(isSupermixWeightCandidate(product("169.00")), false);
+});
+
+test("reads per-pound terms from a variable-weight product", () => {
+  const terms = extractSupermixPurchaseTerms(weighedDetail(), "169.00");
+  assert.equal(terms?.mode, "measure");
+  assert.equal(terms?.unit, "LB");
+  assert.equal(terms?.minimum, "1.5");
+  assert.equal(terms?.increment, "1.5");
+  assert.equal(terms?.priceReferenceQuantity, "1");
+  assert.equal(terms?.source, "supermix_vendabo_product");
+  assert.equal(terms?.evidence.sku, "002019");
+});
+
+test("deli products without a step use their minimum as the step", () => {
+  const terms = extractSupermixPurchaseTerms(weighedDetail({ price: "329.22", minimum: 0.1, step: 0 }), "329.22");
+  assert.equal(terms?.minimum, "0.1");
+  assert.equal(terms?.increment, "0.1");
+});
+
+test("reads per-kilogram terms", () => {
+  assert.equal(extractSupermixPurchaseTerms(weighedDetail({ unit: "kg" }), "169.00")?.unit, "KG");
+});
+
+test("products without variable weight are sold per unit", () => {
+  const terms = extractSupermixPurchaseTerms(weighedDetail({ variableWeight: false }), "169.00");
+  assert.equal(terms?.mode, "unit");
+  assert.equal(terms?.unit, "UND");
+  assert.equal(terms?.minimum, "1");
+
+  // Unit products have no weight data at all (live shape: both null).
+  const plain = {
+    ...weighedDetail(),
+    supermarket: null,
+    variants: [{ ...weighedDetail().variants[0], supermarket: null }],
+  };
+  assert.equal(extractSupermixPurchaseTerms(plain, "169.00")?.mode, "unit");
+  const nullUnit = { ...plain, supermarket: { weight_unit: null } };
+  assert.equal(extractSupermixPurchaseTerms(nullUnit, "169.00")?.mode, "unit");
+});
+
+test("unclear weight data gives no terms", () => {
+  const terms = (detail: unknown, shownPrice = "169.00") => extractSupermixPurchaseTerms(detail, shownPrice);
+  assert.equal(terms(weighedDetail({ pricePerUnit: "199.00" })), undefined);
+  assert.equal(terms(weighedDetail({ pricePerUnit: "unavailable" })), undefined);
+  assert.equal(terms(weighedDetail({ price: "0.00" }), "0.00"), undefined);
+  assert.equal(terms(weighedDetail({ unit: "oz" })), undefined);
+  assert.equal(terms(weighedDetail({ minimum: 0, step: 0 })), undefined);
+  assert.equal(terms(product("169.00")), undefined);
+
+  // The price saved with the terms comes from the product, not the variant.
+  assert.equal(terms(weighedDetail(), "253.50"), undefined);
+
+  // A weight unit without the variant's weight data is an incomplete payload.
+  const incomplete = { ...weighedDetail(), variants: [{ ...weighedDetail().variants[0], supermarket: null }] };
+  assert.equal(terms(incomplete), undefined);
+
+  // Omitted weight fields are not the explicit nulls unit products send.
+  const { supermarket: _product, ...noProductWeight } = weighedDetail();
+  const { supermarket: _variant, ...noVariantWeight } = weighedDetail().variants[0];
+  assert.equal(terms({ ...noProductWeight, variants: [noVariantWeight] }), undefined);
+  assert.equal(terms({ ...noProductWeight, variants: [{ ...noVariantWeight, supermarket: null }] }), undefined);
+  assert.equal(terms({ ...weighedDetail(), supermarket: null, variants: [noVariantWeight] }), undefined);
+});
+
+test("several variants need the linked variant id", () => {
+  const detail = weighedDetail();
+  const twoVariants = { ...detail, variants: [detail.variants[0], { ...detail.variants[0], id: 99 }] };
+  assert.equal(extractSupermixPurchaseTerms(twoVariants, "169.00"), undefined);
+  assert.equal(extractSupermixPurchaseTerms(twoVariants, "169.00", "1314335")?.mode, "measure");
+  assert.equal(extractSupermixPurchaseTerms(twoVariants, "169.00", "12345"), undefined);
 });
