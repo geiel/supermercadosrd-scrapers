@@ -309,7 +309,11 @@ export async function scrapeNacionalPrice(
 }
 
 const NACIONAL_GRAPHQL_URL = "https://supermercadosnacional.com/graphql";
-const NACIONAL_GRAPHQL_STORE_CODE = "default";
+// From 2026-11-18 the `default` store view counted products without listing
+// any of them, on and off for hours at a time. `app_nacional_store_view`,
+// which kept listing them meanwhile, is on the same website (id 1): it holds
+// the same 15,174 products, at the prices the website shows.
+const NACIONAL_GRAPHQL_STORE_CODE = "app_nacional_store_view";
 
 // GraphQL only lists products that are enabled on the Nacional website, which
 // the REST lookup checks through status and website_ids. A SKU it leaves out

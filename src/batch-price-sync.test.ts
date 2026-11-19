@@ -385,3 +385,33 @@ test("sends Magento batches with the store header and SKU list", async () => {
     server.close();
   }
 });
+
+test("fails a Magento batch that counts products but lists none", async () => {
+  let products: { total_count: number; items: unknown[] } = { total_count: 2, items: [] };
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ data: { products } }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const lookup = (skus: string[]) =>
+    fetchMagentoGraphqlItemsBySku({
+      url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/graphql`,
+      storeCode: "default",
+      query: "",
+      skus,
+      itemSchema: z.object({ sku: z.string() }),
+    });
+
+  try {
+    assert.deepEqual(await lookup(["2223501", "2008637"]), {
+      ok: false,
+      reason: "empty_items",
+    });
+
+    // SKUs the store does not have: an empty listing it also did not count.
+    products = { total_count: 0, items: [] };
+    assert.deepEqual(await lookup(["1"]), { ok: true, items: new Map(), totalCount: 0 });
+  } finally {
+    server.close();
+  }
+});

@@ -15,6 +15,11 @@ const batchResponseSchema = z.object({
   }),
 });
 
+// Magento counted matching products but listed none of them. Nacional's
+// `default` store view answered this way, on and off, from 2026-11-18: the
+// request succeeds, yet no SKU in it can be read from the response.
+export const MAGENTO_EMPTY_ITEMS_REASON = "empty_items";
+
 export type MagentoGraphqlBatchLookup<T> =
   | {
       ok: true;
@@ -70,8 +75,14 @@ export async function fetchMagentoGraphqlItemsBySku<T extends { sku: string }>(
     return { ok: false, reason: "invalid_payload" };
   }
 
+  const rawItems = parsed.data.data.products.items ?? [];
+  const totalCount = parsed.data.data.products.total_count ?? null;
+  if (rawItems.length === 0 && totalCount !== null && totalCount > 0) {
+    return { ok: false, reason: MAGENTO_EMPTY_ITEMS_REASON };
+  }
+
   const items = new Map<string, T | null>();
-  for (const rawItem of parsed.data.data.products.items ?? []) {
+  for (const rawItem of rawItems) {
     const item = input.itemSchema.safeParse(rawItem);
     if (item.success) {
       items.set(item.data.sku, item.data);
@@ -87,6 +98,6 @@ export async function fetchMagentoGraphqlItemsBySku<T extends { sku: string }>(
   return {
     ok: true,
     items,
-    totalCount: parsed.data.data.products.total_count ?? null,
+    totalCount,
   };
 }
