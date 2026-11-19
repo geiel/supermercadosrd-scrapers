@@ -21,6 +21,7 @@ import { error, SHOP_NAMES } from "../result.js";
 import { scrapePrice } from "../scrape-price.js";
 import { fetchJumboProductsBySkus, toJumboPriceResult } from "../shops/jumbo.js";
 import { fetchMercaJumboProductsBySkus } from "../shops/merca-jumbo-shared.js";
+import { MAGENTO_EMPTY_ITEMS_REASON } from "../shops/magento-graphql-batch.js";
 import { toMercaJumboPriceResult } from "../shops/merca-jumbo.js";
 import {
   fetchNacionalGraphqlPricesBySkus,
@@ -540,7 +541,10 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
         splitRequests += 1;
       }
       const outcome = await priceChunk(shopId, chunk, options.requestConfig);
-      recordRequest(outcome.ok ? null : outcome.reason, !split);
+      // An empty listing is this store view's problem, not the shared
+      // Magento servers': it must not stop Jumbo or Merca Jumbo.
+      const emptyItems = !outcome.ok && outcome.reason === MAGENTO_EMPTY_ITEMS_REASON;
+      recordRequest(outcome.ok || emptyItems ? null : outcome.reason, !split);
 
       if (!outcome.ok) {
         console.error(
@@ -548,6 +552,20 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
         );
         if (BACKOFF_REASONS.has(outcome.reason)) {
           report.failures.push(outcome.reason);
+          continue;
+        }
+
+        // Splitting cannot help when the store lists nothing, and sending the
+        // rows to single lookups would spend the lookup limit on one chunk.
+        // They keep their stored price and the run fails on this reason.
+        // They are only counted: settling would mark hidden rows as rechecked.
+        if (emptyItems) {
+          report.failures.push(outcome.reason);
+          const failedOutcome = `error:${outcome.reason}`;
+          report.outcomes.set(
+            failedOutcome,
+            (report.outcomes.get(failedOutcome) ?? 0) + chunk.rows.length
+          );
           continue;
         }
 
