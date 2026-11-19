@@ -337,6 +337,8 @@ type ShopReport = {
   batchFound: number;
   lookups: number;
   hiddenUnchanged: number;
+  // Batches the store counted products for but listed none of.
+  emptyBatches: number;
   priceChanges: number;
   minutes: number;
   outcomes: Map<string, number>;
@@ -430,6 +432,7 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
       batchFound: 0,
       lookups: 0,
       hiddenUnchanged: 0,
+      emptyBatches: 0,
       priceChanges: 0,
       minutes: 0,
       outcomes: new Map(),
@@ -441,7 +444,8 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
 
     const stillHidden: ShopPriceRow[] = [];
 
-    const settle = (row: ShopPriceRow, result: ScrapePriceResult, source: string) => {
+    // Counts a row's outcome and writes its report line.
+    const record = (row: ShopPriceRow, result: ScrapePriceResult, source: string) => {
       const outcome = describeResult(result);
       report.outcomes.set(outcome, (report.outcomes.get(outcome) ?? 0) + 1);
       if (priceChanged(row, result)) {
@@ -465,6 +469,10 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
           ? `${row.purchaseMode}:${row.purchaseUnit}:${Number(row.minimumPurchaseQuantity)}:${Number(row.purchaseQuantityIncrement)}:${row.purchaseTermsSource}`
           : null,
       });
+    };
+
+    const settle = (row: ShopPriceRow, result: ScrapePriceResult, source: string) => {
+      record(row, result, source);
 
       // An already hidden price that is still unavailable needs no write.
       if (row.hidden && result.status !== "ok") {
@@ -555,17 +563,21 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
           continue;
         }
 
-        // Splitting cannot help when the store lists nothing, and sending the
-        // rows to single lookups would spend the lookup limit on one chunk.
-        // They keep their stored price and the run fails on this reason.
-        // They are only counted: settling would mark hidden rows as rechecked.
+        // Splitting cannot help when the store lists nothing. Visible rows
+        // get the single lookup, as rows a good response leaves out do: one
+        // such batch can be delisted products the search index still counts,
+        // and a store view that lists nothing ends at the lookup limit.
+        // Hidden rows are recorded but not settled, so the next run rechecks
+        // them instead of waiting a day.
         if (emptyItems) {
-          report.failures.push(outcome.reason);
-          const failedOutcome = `error:${outcome.reason}`;
-          report.outcomes.set(
-            failedOutcome,
-            (report.outcomes.get(failedOutcome) ?? 0) + chunk.rows.length
-          );
+          report.emptyBatches += 1;
+          for (const row of chunk.rows) {
+            if (row.hidden) {
+              record(row, error(shopId, outcome.reason, true, false), "batch");
+            } else {
+              missing.push(row);
+            }
+          }
           continue;
         }
 
@@ -637,6 +649,11 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
       if (write) {
         writeResults([write]);
       }
+    }
+
+    // The lookup limit alone does not say why the batches found so little.
+    if (report.emptyBatches > 0 && report.failures.includes("lookup_limit_reached")) {
+      report.failures.push(`${MAGENTO_EMPTY_ITEMS_REASON}_in_${report.emptyBatches}_batches`);
     }
 
     report.hiddenUnchanged = stillHidden.length;
@@ -728,7 +745,7 @@ async function main() {
         .sort((a, b) => b[1] - a[1])
         .map(([outcome, count]) => `${outcome} ${count}`)
         .join(", ");
-      return `- ${SHOP_NAMES[report.shopId]} (${report.minutes.toFixed(1)} min): ${report.rows} rows, ${report.batchRequests} batch requests (${report.batchFound} found), ${report.lookups} single lookups, ${report.hiddenUnchanged} still hidden, ${report.priceChanges} price changes; ${outcomes}`;
+      return `- ${SHOP_NAMES[report.shopId]} (${report.minutes.toFixed(1)} min): ${report.rows} rows, ${report.batchRequests} batch requests (${report.batchFound} found${report.emptyBatches ? `, ${report.emptyBatches} listed nothing` : ""}), ${report.lookups} single lookups, ${report.hiddenUnchanged} still hidden, ${report.priceChanges} price changes; ${outcomes}`;
     }),
     `- Stopped early: ${stopped.length ? stopped.join(", ") : "no"}`,
     `- Failures: ${failures.length}${failures.length ? ` (${[...new Set(failures)].slice(0, 10).join(", ")})` : ""}`,
