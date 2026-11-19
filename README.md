@@ -82,11 +82,11 @@ scrapers.
   counts when its `linkText` is that slug. An `fq=productId:<id>` API is looked
   up by product id. Rows on the old `st.sirena.do` API, or on an EAN API, stay
   in the per-product batch.
-- Nacional: GraphQL (store `app_nacional_store_view`; `default` has counted
-  products without listing them since 2026-11-18) `final_price`, the price the
-  Nacional website shows and charges, as for Jumbo and Merca Jumbo. The REST
-  lookup's
-  rule (`special_price` while `special_from_date`/`special_to_date` allow it)
+- Nacional: GraphQL (store `app_nacional_store_view`; from 2026-11-18
+  `default` counted products without listing them, on and off) `final_price`,
+  the price the Nacional website shows and charges, as for Jumbo and Merca
+  Jumbo. The REST lookup's rule (`special_price` while
+  `special_from_date`/`special_to_date` allow it)
   is not used: on 2026-11-01 Nacional still charged offers whose end date had
   passed, and the dates read in UTC end offers 4 hours early. GraphQL only
   lists products enabled on the Nacional website, so a SKU it leaves out is

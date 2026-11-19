@@ -16,8 +16,8 @@ const batchResponseSchema = z.object({
 });
 
 // Magento counted matching products but listed none of them. Nacional's
-// `default` store view answered this way from 2026-11-18: the request
-// succeeds, yet no SKU in it can be read from the response.
+// `default` store view answered this way, on and off, from 2026-11-18: the
+// request succeeds, yet no SKU in it can be read from the response.
 export const MAGENTO_EMPTY_ITEMS_REASON = "empty_items";
 
 export type MagentoGraphqlBatchLookup<T> =
