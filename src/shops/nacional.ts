@@ -7,13 +7,16 @@ import {
   type FetchFailureReason,
 } from "../http-client.js";
 import { extractNacionalSku } from "../recovery/shared.js";
-import { error, notFound, ok } from "../result.js";
+import { error, notFound, ok, withStock } from "../result.js";
 import type {
   FetchWithRetryConfig,
   ScrapePriceInput,
   ScrapePriceResult,
 } from "../types.js";
-import { fetchMagentoGraphqlItemsBySku } from "./magento-graphql-batch.js";
+import { fetchMagentoGraphqlItemsBySku,
+  magentoOutOfStockOnline,
+  magentoStockStatusSchema,
+} from "./magento-graphql-batch.js";
 
 const shopId = 2;
 const NACIONAL_HOST = "supermercadosnacional.com";
@@ -158,7 +161,7 @@ function buildNacionalProductLookupUrl(sku: string): string {
   return `${NACIONAL_REST_API_URL}?${params.toString()}`;
 }
 
-function parsePrice(value: unknown): number | null {
+export function parsePrice(value: unknown): number | null {
   const price =
     typeof value === "number"
       ? value
@@ -199,7 +202,7 @@ function isNacionalWebsiteProduct(
   return websiteIds.some((websiteId) => Number(websiteId) === NACIONAL_WEBSITE_ID);
 }
 
-function isSpecialPriceActive(
+export function isSpecialPriceActive(
   specialFromDate: unknown,
   specialToDate: unknown,
   now = new Date()
@@ -300,6 +303,8 @@ export async function scrapeNacionalPrice(
     return notFound(shopId, "product_not_found", true);
   }
 
+  // Alone, REST says nothing about stock: the batch sync decides it from
+  // GraphQL leaving the product out (ccn-rest-stock.ts), so the stored value stays.
   return toNacionalPriceResult({
     price: product.price,
     specialPrice: getAttributeValue(product, "special_price"),
@@ -329,6 +334,7 @@ const nacionalPricesBySkuQuery = `query NacionalPricesBySku($skus: [String!]!, $
     total_count
     items {
       sku
+      stock_status
       price_range {
         minimum_price {
           final_price {
@@ -345,6 +351,7 @@ const nacionalPricesBySkuQuery = `query NacionalPricesBySku($skus: [String!]!, $
 
 const nacionalGraphqlPriceItemSchema = z.object({
   sku: z.string(),
+  stock_status: magentoStockStatusSchema,
   price_range: z
     .object({
       minimum_price: z.object({
@@ -372,11 +379,12 @@ export function toNacionalGraphqlPriceResult(
     return error(shopId, "price_not_found", false, false);
   }
 
+  const stock = { outOfStockOnline: magentoOutOfStockOnline(item.stock_status) };
   if (finalPrice > 0 && finalPrice < regularPrice) {
-    return ok(shopId, finalPrice.toString(), regularPrice.toString());
+    return withStock(ok(shopId, finalPrice.toString(), regularPrice.toString()), stock);
   }
 
-  return ok(shopId, regularPrice.toString(), null);
+  return withStock(ok(shopId, regularPrice.toString(), null), stock);
 }
 
 export async function fetchNacionalGraphqlPricesBySkus(

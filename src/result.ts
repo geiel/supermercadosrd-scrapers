@@ -1,4 +1,5 @@
 import type {
+  ScrapeLocationAvailability,
   ScrapePriceError,
   ScrapePriceNotFound,
   ScrapePriceSuccess,
@@ -70,4 +71,25 @@ export function error(
     retryable,
     hide,
   };
+}
+
+/** Adds the stock signals to an ok result (other results pass through). */
+export function withStock<T extends ScrapePriceSuccess | ScrapePriceNotFound | ScrapePriceError>(
+  result: T,
+  stock: Pick<ScrapePriceSuccess, "outOfStockOnline" | "locations">
+): T {
+  if (result.status !== "ok") {
+    return result;
+  }
+
+  return {
+    ...result,
+    ...(stock.outOfStockOnline !== undefined ? { outOfStockOnline: stock.outOfStockOnline } : {}),
+    ...(stock.locations !== undefined ? { locations: stock.locations } : {}),
+  } as T;
+}
+
+/** In stock at a branch: the store says available and, when it gives a count, units are left. */
+export function locationInStock(location: ScrapeLocationAvailability) {
+  return location.available && (location.stock === null || location.stock > 0);
 }

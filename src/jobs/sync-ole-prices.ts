@@ -242,9 +242,23 @@ async function main() {
     }
 
     // The listing price stays authoritative; the details only add the terms.
-    const terms = fetched.details
-      ? extractOlePurchaseTerms(fetched.details as OleProductDetails)
-      : undefined;
+    // A product that cannot be ordered lists no quantities: its terms would
+    // be made up. It keeps its price, out of stock online, and gets its terms
+    // once Olé sells it again.
+    const details = fetched.details as OleProductDetails | null;
+    if (details?.add_to_cart?.disable_buy_button) {
+      // The details just confirmed it: out of stock even if the listing still sold it.
+      const listing = product as { product_price?: Record<string, unknown> };
+      results.set(
+        row,
+        toOleListingPriceResult({
+          ...listing,
+          product_price: { ...listing.product_price, disable_buy_button: true },
+        })
+      );
+      continue;
+    }
+    const terms = details ? extractOlePurchaseTerms(details) : undefined;
     results.set(
       row,
       terms
@@ -254,8 +268,9 @@ async function main() {
   }
 
   // Products that left the listing are looked up one by one, so a visible
-  // price is hidden only when Olé says the product is gone or cannot be
-  // ordered. Rows already hidden stay hidden without a request.
+  // price is hidden only when Olé says the product is gone (one that cannot
+  // be ordered keeps its price, marked out of stock online). Rows already
+  // hidden stay hidden without a request.
   let lookups = 0;
   for (const row of missing) {
     if (catalogComplete && row.hidden) {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { fetchWithRetry, getSirenaHeaders } from "../http-client.js";
-import { error, notFound, ok } from "../result.js";
+import { error, notFound, ok, withStock } from "../result.js";
 import {
   normalizeSirenaVtexProduct,
   parseSirenaVtexProductsPayload,
@@ -54,14 +54,18 @@ export function toSirenaVtexPriceResult(
     return notFound(shopId, "vtex_price_not_found", true);
   }
 
-  return ok(
-    shopId,
-    normalizedProduct.currentPrice,
-    normalizedProduct.regularPrice,
-    null,
-    undefined,
-    undefined,
-    extractSirenaVtexPurchaseTerms(normalizedProduct, input)
+  return withStock(
+    ok(
+      shopId,
+      normalizedProduct.currentPrice,
+      normalizedProduct.regularPrice,
+      null,
+      undefined,
+      undefined,
+      extractSirenaVtexPurchaseTerms(normalizedProduct, input)
+    ),
+    // Without IsAvailable nothing is known: the stored value stays.
+    normalizedProduct.isAvailable === null ? {} : { outOfStockOnline: !normalizedProduct.isAvailable }
   );
 }
 
@@ -111,13 +115,17 @@ export async function scrapeSirenaPrice(
   const product = parsed.data.product;
   const purchaseTerms = extractSirenaLegacyPurchaseTerms(product, input);
 
-  return ok(
-    shopId,
-    currentPrice,
-    isPositivePriceString(regularPrice) ? regularPrice : currentPrice,
-    null,
-    undefined,
-    undefined,
-    purchaseTerms
+  // The legacy st.sirena.do API says nothing about stock.
+  return withStock(
+    ok(
+      shopId,
+      currentPrice,
+      isPositivePriceString(regularPrice) ? regularPrice : currentPrice,
+      null,
+      undefined,
+      undefined,
+      purchaseTerms
+    ),
+    { outOfStockOnline: null }
   );
 }

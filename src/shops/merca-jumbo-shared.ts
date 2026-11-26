@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { dedupeComparableUrls, normalizeNacionalImageUrl } from "../image-utils.js";
 import { fetchWithRetryDetailed } from "../http-client.js";
-import type { FetchWithRetryConfig } from "../types.js";
+import type { FetchWithRetryConfig, ScrapeLocationAvailability } from "../types.js";
+import { randomDelay } from "../utils.js";
 import {
   magentoPurchaseTermsGraphqlFields,
   magentoPurchaseTermsGraphqlSchema,
@@ -10,6 +11,8 @@ import {
 import {
   fetchMagentoGraphqlItemsBySku,
   type MagentoGraphqlBatchLookup,
+  magentoOutOfStockOnline,
+  magentoStockStatusSchema,
 } from "./magento-graphql-batch.js";
 
 const MERCA_JUMBO_API_URL_ENV = "MERCA_JUMBO_API_URL";
@@ -17,6 +20,7 @@ const MERCA_JUMBO_STORE_CODE_ENV = "MERCA_JUMBO_STORE_CODE";
 
 const mercaJumboProductItemFields = `
       sku
+      stock_status
       name
       url_key
 ${magentoPurchaseTermsGraphqlFields}
@@ -44,13 +48,140 @@ const mercaJumboProductQuery = `query MercaJumboProductBySku($sku: String!) {
   }
 }`;
 
-const mercaJumboProductsBySkuQuery = `query MercaJumboProductsBySku($skus: [String!]!, $pageSize: Int!) {
+// Each branch's stock comes from SourceItems, one branch per field. Magento
+// takes at most 10 aliases a query, so a request holds one unaliased field and
+// 10 aliased: 11 branches beside the prices, and the rest (2 of 13 on
+// 2026-11-26) in a second request. The batch sync asks 100 products at a time
+// for Merca Jumbo, so this costs the same requests as prices alone at 50.
+const SOURCES_PER_REQUEST = 11;
+const BACKOFF_STATUSES = new Set(["http_403", "http_429", "http_503"]);
+
+function sourceItemsFields(codes: string[]) {
+  return codes
+    .map(
+      (code, index) =>
+        `${index === 0 ? "" : `s${code}: `}SourceItems(source_code: "${code}", skus: $skus, pageSize: $pageSize) { items { sku quantity status } }`
+    )
+    .join("\n  ");
+}
+
+function mercaJumboProductsBySkuQuery(sourceCodes: string[]) {
+  return `query MercaJumboProductsBySku($skus: [String!]!, $pageSize: Int!) {
   products(filter: { sku: { in: $skus } }, pageSize: $pageSize) {
     total_count
     items {${mercaJumboProductItemFields}
     }
   }
+  ${sourceItemsFields(sourceCodes)}
 }`;
+}
+
+// A field without its list, or a row without status, is not an empty branch:
+// the whole batch then carries no branches and the stored ones stay.
+const sourceItemsSchema = z.object({
+  items: z.array(
+    z.object({
+      sku: z.string(),
+      quantity: z.number().nullish(),
+      // 1 in stock, 0 out; anything else is not understood and voids the batch's branches.
+      status: z.union([z.literal(0), z.literal(1)]),
+    })
+  ),
+});
+
+type SourceItem = { code: string; sku: string; quantity: number | null; status: 0 | 1 };
+
+/** The branch rows of these fields, or null when any field is missing (then no branch is known). */
+function readSourceItems(data: Record<string, unknown>, codes: string[]): SourceItem[] | null {
+  const rows: SourceItem[] = [];
+  for (const [index, code] of codes.entries()) {
+    const parsed = sourceItemsSchema.safeParse(data[index === 0 ? "SourceItems" : `s${code}`]);
+    if (!parsed.success) return null;
+    for (const item of parsed.data.items) {
+      rows.push({ code, sku: item.sku, quantity: item.quantity ?? null, status: item.status });
+    }
+  }
+  return rows;
+}
+
+const sourceCodesByStore = new Map<string, string[]>();
+
+/** Merca Jumbo's branches (InventorySources), once per run; none when they can't be read. */
+async function mercaJumboSourceCodes(
+  apiUrl: string,
+  storeCode: string,
+  requestConfig?: FetchWithRetryConfig
+): Promise<string[] | { failed: string }> {
+  const known = sourceCodesByStore.get(storeCode);
+  if (known) return known;
+
+  const { response, failureReason } = await fetchWithRetryDetailed(
+    apiUrl,
+    {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json", store: storeCode },
+      body: JSON.stringify({ query: "{ InventorySources { source_code } }" }),
+    },
+    requestConfig
+  );
+  // The store pushing back stops the batch queue, as any request does (after
+  // its retries the client gives no response, only the reason).
+  const status = response ? `http_${response.status}` : failureReason;
+  if (BACKOFF_STATUSES.has(status)) {
+    return { failed: status };
+  }
+  const parsed = z
+    .object({
+      errors: z.undefined().or(z.null()).or(z.array(z.unknown()).length(0)),
+      data: z.object({ InventorySources: z.array(z.object({ source_code: z.string() })) }),
+    })
+    .safeParse(response?.ok ? await response.json().catch(() => null) : null);
+  if (!parsed.success) {
+    // Not asked again this run: prices alone, one request per batch.
+    console.error("[MERCA] branches could not be read: prices only this run");
+    sourceCodesByStore.set(storeCode, []);
+    return [];
+  }
+
+  // Codes go into the query text: only plain ones.
+  const codes = parsed.data.data.InventorySources.map((source) => source.source_code).filter((code) =>
+    /^[A-Za-z0-9_-]+$/.test(code)
+  );
+  sourceCodesByStore.set(storeCode, codes);
+  return codes;
+}
+
+/** The branches past the first request's, in one more request; null if it fails. */
+async function fetchRemainingSourceItems(
+  apiUrl: string,
+  storeCode: string,
+  skus: string[],
+  codes: string[],
+  requestConfig?: FetchWithRetryConfig
+): Promise<SourceItem[] | { failed: string } | null> {
+  await randomDelay(1000, 1500);
+  const { response, failureReason } = await fetchWithRetryDetailed(
+    apiUrl,
+    {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json", store: storeCode },
+      body: JSON.stringify({
+        query: `query MercaJumboSourceItems($skus: [String!]!, $pageSize: Int!) {\n  ${sourceItemsFields(codes)}\n}`,
+        variables: { skus, pageSize: skus.length },
+      }),
+    },
+    requestConfig
+  );
+  // The store pushing back must stop the batch queue like any request does.
+  if (!response) return { failed: failureReason };
+  if (!response.ok) return { failed: `http_${response.status}` };
+  const parsed = z
+    .object({ data: z.record(z.unknown()), errors: z.array(z.unknown()).nullish() })
+    .safeParse(await response.json().catch(() => null));
+  // Any GraphQL error leaves a field half read: no branches this batch.
+  if (!parsed.success || (parsed.data.errors?.length ?? 0) > 0) return null;
+  return readSourceItems(parsed.data.data, codes);
+}
 
 const mercaJumboProductItemSchema = z
   .object({
@@ -69,6 +200,7 @@ const mercaJumboProductItemSchema = z
       })
       .nullable()
       .optional(),
+    stock_status: magentoStockStatusSchema,
     price_range: z
       .object({
         minimum_price: z.object({
@@ -96,6 +228,9 @@ const mercaJumboProductResponseSchema = z.object({
 });
 
 export type MercaJumboProduct = {
+  outOfStockOnline: boolean | undefined;
+  /** Each branch that carries it (batch only); undefined when the branches could not be read. */
+  locations?: ScrapeLocationAvailability[];
   sku: string;
   name: string | null;
   urlKey: string | null;
@@ -144,7 +279,7 @@ export function resolveMercaJumboApiUrl(api: string | null | undefined) {
     normalizeEnvValue(process.env[MERCA_JUMBO_API_URL_ENV]);
 }
 
-function resolveMercaJumboStoreCode() {
+export function resolveMercaJumboStoreCode() {
   return normalizeEnvValue(process.env[MERCA_JUMBO_STORE_CODE_ENV]);
 }
 
@@ -285,6 +420,7 @@ function toMercaJumboProduct(product: MercaJumboProductItem): MercaJumboProduct 
       product.price_range?.minimum_price.regular_price.value ?? null
     ),
     purchaseTermsFields: product,
+    outOfStockOnline: magentoOutOfStockOnline(product.stock_status),
   };
 }
 
@@ -305,11 +441,16 @@ export async function fetchMercaJumboProductsBySkus(
     return { ok: false, reason: "missing_store_code" };
   }
 
+  const sources = await mercaJumboSourceCodes(apiUrl, storeCode, requestConfig);
+  if (!Array.isArray(sources)) return { ok: false, reason: sources.failed };
+  const sourceCodes = sources;
+  const firstCodes = sourceCodes.slice(0, SOURCES_PER_REQUEST);
+  const restCodes = sourceCodes.slice(SOURCES_PER_REQUEST);
   const lookup = await fetchMagentoGraphqlItemsBySku(
     {
       url: apiUrl,
       storeCode,
-      query: mercaJumboProductsBySkuQuery,
+      query: mercaJumboProductsBySkuQuery(firstCodes),
       skus: input.skus,
       itemSchema: mercaJumboProductItemSchema,
     },
@@ -319,13 +460,46 @@ export async function fetchMercaJumboProductsBySkus(
     return lookup;
   }
 
+  // Prices stand on their own: if a branch field fails, this batch just
+  // carries no branches and the stored ones stay.
+  let sourceItems =
+    sourceCodes.length > 0 && !lookup.hasErrors ? readSourceItems(lookup.data, firstCodes) : null;
+  if (sourceItems && restCodes.length > 0) {
+    const rest = await fetchRemainingSourceItems(apiUrl, storeCode, input.skus, restCodes, requestConfig);
+    if (rest && "failed" in rest) {
+      if (BACKOFF_STATUSES.has(rest.failed)) return { ok: false, reason: rest.failed };
+      sourceItems = null;
+    } else {
+      sourceItems = rest ? [...sourceItems, ...rest] : null;
+    }
+  }
+
   return {
     ...lookup,
     items: new Map(
-      [...lookup.items].map(([sku, item]) => [
-        sku,
-        item === null ? null : toMercaJumboProduct(item),
-      ])
+      [...lookup.items].map(([sku, item]) => {
+        if (item === null) return [sku, null];
+        return [
+          sku,
+          {
+            ...toMercaJumboProduct(item),
+            ...(sourceItems ? { locations: mercaJumboLocations(sourceItems, sku) } : {}),
+          },
+        ];
+      })
     ),
   };
+}
+
+/** Its branch rows; empty when the branches were read and none lists it. */
+function mercaJumboLocations(sourceItems: SourceItem[], sku: string): ScrapeLocationAvailability[] {
+  return sourceItems
+    .filter((item) => item.sku === sku)
+    .map((item) => ({
+      externalId: item.code,
+      available: item.status === 1,
+      stock: item.quantity,
+      currentPrice: null,
+      regularPrice: null,
+    }));
 }

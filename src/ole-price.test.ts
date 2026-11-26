@@ -138,9 +138,18 @@ test("ignores old prices that are not higher than the price", () => {
   assert.equal(result.status === "ok" && result.regularPrice, null);
 });
 
-test("hides products that cannot be ordered or have no price", () => {
+test("keeps the price of a product that cannot be ordered, out of stock online", () => {
+  const result = toOleListingPriceResult(listingProduct(199, { disableBuyButton: true }));
+
+  assert.equal(result.status === "ok" && result.currentPrice, "199.00");
+  assert.equal(result.status === "ok" && result.outOfStockOnline, true);
+
+  const orderable = toOleListingPriceResult(listingProduct(199));
+  assert.equal(orderable.status === "ok" && orderable.outOfStockOnline, false);
+});
+
+test("hides products that have no price", () => {
   for (const [input, reason] of [
-    [listingProduct(199, { disableBuyButton: true }), "unavailable"],
     [listingProduct(null), "price_not_found"],
     [listingProduct(0), "price_not_found"],
   ] as const) {
@@ -223,14 +232,20 @@ test("prices fixed-size products from the details without purchase terms", () =>
   assert.equal(result.status === "ok" && "purchaseTerms" in result, false);
 });
 
-test("hides products that are gone or cannot be ordered in the details", () => {
-  for (const [input, reason] of [
-    [null, "product_not_found"],
-    [details(127, { disableBuyButton: true }), "unavailable"],
-    [details(127, { disableBuyButton: true, allowedQuantities: ["1", "2", "5"] }), "unavailable"],
-  ] as const) {
+test("hides products that are gone in the details", () => {
+  const result = toOleDetailsPriceResult(null);
+  assert.equal(result.status === "not_found" && result.reason, "product_not_found");
+});
+
+test("keeps the price of details that cannot be ordered, out of stock online", () => {
+  for (const input of [
+    details(127, { disableBuyButton: true }),
+    details(127, { disableBuyButton: true, allowedQuantities: ["1", "2", "5"] }),
+  ]) {
     const result = toOleDetailsPriceResult(input);
-    assert.equal(result.status === "not_found" && result.reason, reason);
+    assert.equal(result.status, "ok");
+    assert.equal(result.status === "ok" && result.outOfStockOnline, true);
+    assert.equal(result.status === "ok" && "purchaseTerms" in result, false);
   }
 });
 

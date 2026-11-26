@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { fetchWithRetry, getBravoHeaders } from "../http-client.js";
-import { error, notFound, ok } from "../result.js";
+import { error, locationInStock, notFound, ok, withStock } from "../result.js";
 import type {
   FetchWithRetryConfig,
+  ScrapeLocationAvailability,
   ScrapePriceInput,
   ScrapePriceResult,
 } from "../types.js";
@@ -28,6 +29,9 @@ const productSchema = z
         z.object({
           idTiendaArticuloTienda: z.number(),
           pvpArticuloTienda: z.number(),
+          // Read loosely: an odd stock field must never cost the price.
+          disponibleArticuloTienda: z.unknown().optional(),
+          stockArticuloTienda: z.unknown().optional(),
           associatedOferta: z.array(
             z.object({
               precioReferenciaArticuloTiendaOferta: z.number(),
@@ -98,18 +102,67 @@ export function bravoPriceFromPayload(
 
   const data = parsed.data.data;
   const purchaseTerms = extractBravoPurchaseTerms(data, input);
+  const locations = bravoLocations(data.associatedTienda);
 
-  return ok(
-    shopId,
-    String(selected.pvpArticuloTienda),
-    selected.associatedOferta[0]
-      ? String(selected.associatedOferta[0].precioReferenciaArticuloTiendaOferta)
-      : null,
-    null,
-    undefined,
-    undefined,
-    purchaseTerms
+  return withStock(
+    ok(
+      shopId,
+      String(selected.pvpArticuloTienda),
+      bravoRegularPrice(selected),
+      String(selected.idTiendaArticuloTienda),
+      undefined,
+      undefined,
+      purchaseTerms
+    ),
+    // Bravo sells online from every branch: out of stock online only when no
+    // branch has it. Without availability fields nothing is known, and the
+    // stored branches stay.
+    locations.length === 0
+      ? {}
+      : { locations, outOfStockOnline: !locations.some(bravoLocationInStock) }
   );
+}
+
+type BravoTienda = Extract<
+  z.infer<typeof productSchema>,
+  { data: unknown }
+>["data"]["associatedTienda"][number];
+
+function bravoRegularPrice(tienda: BravoTienda) {
+  return tienda.associatedOferta[0]
+    ? String(tienda.associatedOferta[0].precioReferenciaArticuloTiendaOferta)
+    : null;
+}
+
+/** In stock at a branch: Bravo says it is available and has units left. */
+export const bravoLocationInStock = locationInStock;
+
+/** Every branch with its availability, or none when any branch leaves it out (a partial answer replaces nothing). */
+function bravoLocations(tiendas: BravoTienda[]): ScrapeLocationAvailability[] {
+  if (
+    tiendas.some(
+      (tienda) =>
+        typeof tienda.disponibleArticuloTienda !== "boolean" ||
+        (tienda.stockArticuloTienda !== undefined &&
+          tienda.stockArticuloTienda !== null &&
+          !(typeof tienda.stockArticuloTienda === "number" && Number.isFinite(tienda.stockArticuloTienda)))
+    )
+  ) {
+    return [];
+  }
+  return tiendas
+    .map((tienda) => ({
+      externalId: String(tienda.idTiendaArticuloTienda),
+      available: tienda.disponibleArticuloTienda === true,
+      stock:
+        typeof tienda.stockArticuloTienda === "number" &&
+        Number.isFinite(tienda.stockArticuloTienda)
+          ? tienda.stockArticuloTienda
+          : null,
+      currentPrice:
+        tienda.pvpArticuloTienda > 0 ? String(tienda.pvpArticuloTienda) : null,
+      regularPrice: bravoRegularPrice(tienda),
+    }));
 }
 
 const BRAVO_API = "https://bravova-api.superbravo.com.do";

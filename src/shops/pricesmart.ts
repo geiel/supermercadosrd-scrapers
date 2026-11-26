@@ -5,7 +5,7 @@ import {
   PREFERRED_DO_PRICESMART_LOCATION_IDS,
   PRICESMART_DO_DEFAULT_LOCATION_ID,
 } from "../pricesmart-locations.js";
-import { error, notFound, ok } from "../result.js";
+import { error, notFound, ok, withStock } from "../result.js";
 import {
   formatAmount,
   formatUnit,
@@ -15,6 +15,7 @@ import {
 } from "../unit-utils.js";
 import type {
   FetchWithRetryConfig,
+  ScrapeLocationAvailability,
   ScrapePriceInput,
   ScrapePriceResult,
 } from "../types.js";
@@ -86,7 +87,7 @@ type PricesmartLocationAttribute = z.infer<
   typeof pricesmartLocationAttributeSchema
 >[number];
 
-type PricesmartLocationCandidate = {
+export type PricesmartLocationCandidate = {
   country: string;
   club?: string;
   currentPrice: string;
@@ -519,12 +520,13 @@ export async function scrapePricesmartPrice(
     (attr) => attr.name === "sold_by_weight"
   );
 
+  const availabilityEntries = parseLocationAttributes(availabilityRaw?.value);
   const locationCandidates = buildLocationCandidates({
     productPrice,
     originalPrice,
     weightEntries: parseLocationAttributes(weightRaw?.value),
     weightUnitEntries: parseLocationAttributes(weightUnitRaw?.value),
-    availabilityEntries: parseLocationAttributes(availabilityRaw?.value),
+    availabilityEntries,
     soldByWeightEntries: parseLocationAttributes(soldByWeightRaw?.value),
   });
   const currentPrice = selectLocationCandidate(locationCandidates, input);
@@ -555,13 +557,76 @@ export async function scrapePricesmartPrice(
     return error(shopId, "source_unit_mismatch", false, true);
   }
 
-  return ok(
-    shopId,
-    currentPrice.currentPrice,
-    currentPrice.regularPrice ?? null,
-    currentPrice.club ?? null,
-    undefined,
-    unitUpdate,
-    null
+  const locations = pricesmartClubLocations(availabilityEntries, locationCandidates);
+
+  return withStock(
+    ok(
+      shopId,
+      currentPrice.currentPrice,
+      currentPrice.regularPrice ?? null,
+      currentPrice.club ?? null,
+      undefined,
+      unitUpdate,
+      null
+    ),
+    // Out of stock online only when no club in the country has it. A priced
+    // club without a known availability means a partial answer: nothing is
+    // known then, and the stored clubs stay.
+    locations.length === 0 ||
+      availabilityEntries.some(
+        (entry) =>
+          entry.country === "DO" &&
+          entry.club &&
+          entry.club !== PRICESMART_DO_DEFAULT_LOCATION_ID &&
+          !locations.some((club) => club.externalId === entry.club)
+      ) ||
+      locationCandidates.some(
+        (candidate) =>
+          candidate.club &&
+          candidate.club !== PRICESMART_DO_DEFAULT_LOCATION_ID &&
+          !locations.some((club) => club.externalId === candidate.club)
+      )
+      ? {}
+      : { locations, outOfStockOnline: !locations.some((club) => club.available) }
   );
+}
+
+/**
+ * Each Dominican club with a known availability, from product_availability
+ * (a club out of stock may carry no price of its own), with its price when it
+ * has one; "68" is the country, not a club.
+ */
+export function pricesmartClubLocations(
+  availabilityEntries: PricesmartLocationAttribute[],
+  candidates: PricesmartLocationCandidate[]
+): ScrapeLocationAvailability[] {
+  const clubs = new Map<string, ScrapeLocationAvailability>();
+  for (const entry of availabilityEntries) {
+    const club = entry.club;
+    const available = parseBooleanAttribute(
+      entry.value === undefined || entry.value === null ? null : String(entry.value)
+    );
+    if (
+      entry.country !== "DO" ||
+      !club ||
+      club === PRICESMART_DO_DEFAULT_LOCATION_ID ||
+      available === null ||
+      clubs.has(club)
+    ) {
+      continue;
+    }
+
+    const priced = candidates.find(
+      (candidate) => candidate.country === "DO" && candidate.club === club
+    );
+    clubs.set(club, {
+      externalId: club,
+      available,
+      stock: null,
+      currentPrice: priced?.currentPrice ?? null,
+      regularPrice: priced?.regularPrice ?? null,
+    });
+  }
+
+  return [...clubs.values()];
 }

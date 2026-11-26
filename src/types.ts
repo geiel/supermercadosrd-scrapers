@@ -57,6 +57,24 @@ export type ScrapePriceSuccess = {
   };
 
   purchaseTerms?: PurchaseTerms | null;
+  /**
+   * true = the store says it is out of stock online (the price still stands),
+   * false = in stock, null = this store gives no signal. Left out, the stored
+   * value is kept (a fallback lookup that cannot see stock).
+   */
+  outOfStockOnline?: boolean | null;
+  /** The product at each branch, when the store lists them (Bravo, PriceSmart). */
+  locations?: ScrapeLocationAvailability[];
+};
+
+export type ScrapeLocationAvailability = {
+  /** The store's own branch code: 1000 at Bravo, 6801 at PriceSmart. */
+  externalId: string;
+  /** As the store says it; Bravo also gives the units in stock. */
+  available: boolean;
+  stock: number | null;
+  currentPrice: string | null;
+  regularPrice: string | null;
 };
 
 export type ScrapePriceNotFound = {

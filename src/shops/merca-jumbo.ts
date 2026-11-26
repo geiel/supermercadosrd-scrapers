@@ -1,4 +1,4 @@
-import { error, notFound, ok } from "../result.js";
+import { error, notFound, ok, locationInStock, withStock } from "../result.js";
 import type {
   FetchWithRetryConfig,
   ScrapePriceInput,
@@ -61,13 +61,29 @@ export function toMercaJumboPriceResult(
     }
   );
 
-  return ok(
-    shopId,
-    product.finalPrice,
-    product.regularPrice,
-    null,
-    undefined,
-    undefined,
-    purchaseTerms
+  return withStock(
+    ok(
+      shopId,
+      product.finalPrice,
+      product.regularPrice,
+      null,
+      undefined,
+      undefined,
+      purchaseTerms
+    ),
+    // With branches, out of stock online only when none has it. Without them
+    // (they could not be read) nothing changes: the stored flag goes with the
+    // stored branches.
+    // Listed with no branch rows: the flag and the (empty) branches change
+    // together, and only when stock_status says which way; otherwise the
+    // stored ones stay, so a product back in stock never keeps a stale flag
+    // and an unknown status never empties its branches.
+    product.locations === undefined
+      ? {}
+      : product.locations.length > 0
+        ? { locations: product.locations, outOfStockOnline: !product.locations.some(locationInStock) }
+        : product.outOfStockOnline === undefined
+          ? {}
+          : { locations: [], outOfStockOnline: product.outOfStockOnline }
   );
 }

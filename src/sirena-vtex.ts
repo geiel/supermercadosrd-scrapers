@@ -99,6 +99,8 @@ export type NormalizedSirenaVtexProduct = {
   productReference: string | null;
   currentPrice: string | null;
   regularPrice: string | null;
+  /** VTEX IsAvailable of the default seller; null when VTEX does not say. */
+  isAvailable: boolean | null;
   measurementUnit: string | null;
   unitMultiplier: number | null;
   itemNameComplete: string | null;
@@ -507,6 +509,7 @@ export function normalizeSirenaVtexProduct(
     currentPrice: toPriceString(offer?.Price),
     regularPrice:
       toPriceString(offer?.ListPrice) ?? toPriceString(offer?.Price) ?? null,
+    isAvailable: typeof offer?.IsAvailable === "boolean" ? offer.IsAvailable : null,
     measurementUnit:
       normalizeString(sellerSelection?.item.measurementUnit) || null,
     unitMultiplier: toPositiveNumber(sellerSelection?.item.unitMultiplier),

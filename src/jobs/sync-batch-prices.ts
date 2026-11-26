@@ -17,7 +17,7 @@ import { applyScrapeResult, type ShopPriceRow } from "../db/apply-scrape-result.
 import type { PurchaseTerms } from "../purchase-terms.js";
 import { closeDb, db } from "../db/client.js";
 import { products, productsShopsPrices } from "../db/schema.js";
-import { error, SHOP_NAMES } from "../result.js";
+import { error, notFound, SHOP_NAMES } from "../result.js";
 import { scrapePrice } from "../scrape-price.js";
 import { fetchJumboProductsBySkus, toJumboPriceResult } from "../shops/jumbo.js";
 import { fetchMercaJumboProductsBySkus } from "../shops/merca-jumbo-shared.js";
@@ -27,6 +27,11 @@ import {
   fetchNacionalGraphqlPricesBySkus,
   toNacionalGraphqlPriceResult,
 } from "../shops/nacional.js";
+import {
+  fetchCcnRestProductsBySkus,
+  isCcnStockShop,
+  toCcnLeftOutResult,
+} from "../shops/ccn-rest-stock.js";
 import { toSirenaVtexPriceResult } from "../shops/sirena.js";
 import {
   fetchSirenaVtexProductsByFilter,
@@ -38,9 +43,12 @@ import { mapWithConcurrency, randomDelay } from "../utils.js";
 
 // Refreshes every Sirena (VTEX), Nacional, Jumbo and Merca Jumbo price with
 // batched lookups: one request prices up to 50 products (~1,000 requests for
-// ~50k rows, where the per-product batch spent one request per row). Products
-// a batch leaves out are looked up one by one with the single scrapers, so a
-// visible price is only hidden on the same evidence as before. Hidden rows are
+// ~50k rows, where the per-product batch spent one request per row). Nacional,
+// Jumbo and Merca Jumbo leave products with no stock out of GraphQL: one REST
+// request per 50 of those rows marks them out of stock online or hides the ones
+// the store dropped. Other products a batch leaves out are looked up one by one
+// with the single scrapers, so a visible price is only hidden on the same
+// evidence as before. Hidden rows are
 // rechecked once a day. It runs on its own schedule; the per-product batch and
 // the deals job skip these rows.
 
@@ -200,8 +208,34 @@ async function touchHiddenRows(shopId: BatchPriceShopId, rows: ShopPriceRow[]) {
 }
 
 type ChunkOutcome =
-  | { ok: true; results: Map<ShopPriceRow, ScrapePriceResult> }
+  | {
+      ok: true;
+      results: Map<ShopPriceRow, ScrapePriceResult>;
+      // Magento stores: every SKU the response listed (valid or not), and
+      // whether it listed all it counted. Only a row whose SKUs a complete
+      // response did not list at all is out of stock or gone.
+      listed?: Set<string>;
+      complete?: boolean;
+    }
   | { ok: false; reason: string };
+
+function magentoListing(lookup: {
+  items: Map<string, unknown>;
+  totalCount: number | null;
+  hasErrors: boolean;
+  itemsListed: boolean;
+}) {
+  return {
+    listed: new Set(lookup.items.keys()),
+    // Only an explicit list and count, matched by the items and with no
+    // errors, makes an absence mean something.
+    complete:
+      lookup.itemsListed &&
+      !lookup.hasErrors &&
+      lookup.totalCount !== null &&
+      lookup.totalCount <= lookup.items.size,
+  };
+}
 
 function mapResults<T>(
   matches: Map<ShopPriceRow, T>,
@@ -247,6 +281,7 @@ async function priceChunk(
         results: mapResults(matchSkuItems(chunk.rows, lookup.items), (item) =>
           toNacionalGraphqlPriceResult(item)
         ),
+        ...magentoListing(lookup),
       };
     }
     case 3: {
@@ -261,6 +296,7 @@ async function priceChunk(
           matchSkuItems(chunk.rows, lookup.items),
           toJumboPriceResult
         ),
+        ...magentoListing(lookup),
       };
     }
     case 7: {
@@ -278,6 +314,7 @@ async function priceChunk(
           matchSkuItems(chunk.rows, lookup.items),
           toMercaJumboPriceResult
         ),
+        ...magentoListing(lookup),
       };
     }
   }
@@ -336,6 +373,8 @@ type ShopReport = {
   batchRequests: number;
   batchFound: number;
   lookups: number;
+  // REST requests that sorted rows GraphQL left out into out of stock or gone.
+  stockRequests: number;
   hiddenUnchanged: number;
   // Batches the store counted products for but listed none of.
   emptyBatches: number;
@@ -431,6 +470,7 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
       batchRequests: 0,
       batchFound: 0,
       lookups: 0,
+      stockRequests: 0,
       hiddenUnchanged: 0,
       emptyBatches: 0,
       priceChanges: 0,
@@ -443,6 +483,9 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
     console.log(`[INFO] ${shopName} rows=${rows.length}`);
 
     const stillHidden: ShopPriceRow[] = [];
+    // Nacional, Jumbo and Merca Jumbo: rows a good GraphQL response left out,
+    // visible and hidden. Their REST check tells out of stock from gone.
+    const leftOut: ShopPriceRow[] = [];
 
     // Counts a row's outcome and writes its report line.
     const record = (row: ShopPriceRow, result: ScrapePriceResult, source: string) => {
@@ -523,10 +566,14 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
     }
     writeResults(writesWithoutRequests);
 
-    const maxKeys = Math.min(
-      options.batchSize,
-      shopId === 1 ? SIRENA_VTEX_MAX_SEARCH_RESULTS : options.batchSize
-    );
+    // Merca Jumbo prices twice as many per request: each batch takes a second
+    // request for the branches past the first 11 (merca-jumbo-shared.ts).
+    const maxKeys =
+      shopId === 1
+        ? Math.min(options.batchSize, SIRENA_VTEX_MAX_SEARCH_RESULTS)
+        : shopId === 7
+          ? options.batchSize * 2
+          : options.batchSize;
 
     // A request that fails for any reason but backoff is split in two and
     // each half is asked again, down to single rows. A product that breaks
@@ -603,9 +650,22 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
       for (const row of chunk.rows) {
         const result = outcome.results.get(row);
         if (!result) {
-          // Left out of a good response: visible rows get the single
-          // lookup; hidden ones stay hidden until they show up again.
-          if (row.hidden) {
+          // Left out of a good, complete response: Nacional, Jumbo and Merca
+          // Jumbo rows get the REST stock check. A listed but unreadable item
+          // or a truncated listing proves nothing: those rows, and other
+          // stores', go the old way (visible ones get the single lookup,
+          // hidden ones stay hidden until they show up again).
+          const listedButUnread =
+            outcome.listed !== undefined &&
+            (batchLookupKeys(row)?.keys ?? []).some((key) => outcome.listed!.has(key));
+          if (isCcnStockShop(shopId) && outcome.complete !== false && !listedButUnread) {
+            leftOut.push(row);
+          } else if (isCcnStockShop(shopId) && outcome.complete === false && !listedButUnread) {
+            // A listing with errors or cut short proves nothing about what it
+            // left out (and the single lookup would ask the same broken store
+            // view): keep the stored price; a later complete run decides.
+            record(row, error(shopId, "partial_listing", true, false), "batch");
+          } else if (row.hidden) {
             stillHidden.push(row);
           } else {
             missing.push(row);
@@ -620,6 +680,69 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
         }
       }
       writeResults(writes);
+    }
+
+    // These stores leave a product with no stock out of GraphQL. One REST
+    // request per batch says, for each left-out row, whether the store still
+    // sells it (out of stock online, priced as its page shows) or dropped it
+    // (hidden). If REST fails, rows fall back to what they got before.
+    if (isCcnStockShop(shopId)) {
+      const stockChunks = chunkBatchRows(
+        leftOut.flatMap((row) => {
+          const lookup = batchLookupKeys(row);
+          return lookup ? [{ row, lookup }] : [];
+        }),
+        options.batchSize
+      );
+      for (const chunk of stockChunks) {
+        // Without a REST answer nothing is known: prices stay, nothing is
+        // hidden, and hidden rows keep their check time so the next run
+        // asks again. (The single lookups would hide what is only out of
+        // stock: Jumbo's and Merca's ask GraphQL again.)
+        const fallBack = (reason: string) => {
+          for (const row of chunk.rows) {
+            record(row, error(shopId, reason, true, false), "stock");
+          }
+        };
+        if (stoppedReason) {
+          fallBack("skipped_stock_check");
+          continue;
+        }
+
+        await paceRequest();
+        report.stockRequests += 1;
+        const lookup = await fetchCcnRestProductsBySkus(shopId, chunk.keys, options.requestConfig);
+        recordRequest(lookup.ok ? null : lookup.reason);
+        if (!lookup.ok) {
+          console.error(
+            `[ERROR] ${shopName} stock check of ${chunk.rows.length} rows failed reason=${lookup.reason}`
+          );
+          report.failures.push(`stock_check:${lookup.reason}`);
+          fallBack(lookup.reason);
+          continue;
+        }
+
+        const matches = matchSkuItems(chunk.rows, lookup.items);
+        const writes = [];
+        for (const row of chunk.rows) {
+          const keys = batchLookupKeys(row)?.keys ?? [];
+          const item = matches.get(row);
+          // A SKU REST listed but could not read says nothing; one it did not
+          // list at all (in a complete answer) is gone.
+          const result = item
+            ? toCcnLeftOutResult(shopId, item)
+            : keys.some((key) => lookup.items.has(key))
+              ? error(shopId, "invalid_stock_item", false, false)
+              : notFound(shopId, "product_not_found", true);
+          if (result.status === "error") {
+            record(row, result, "stock");
+            continue;
+          }
+          const write = settle(row, result, "stock");
+          if (write) writes.push(write);
+        }
+        writeResults(writes);
+      }
     }
 
     // Single lookups, capped so a broken batch cannot turn into thousands of
@@ -745,7 +868,7 @@ async function main() {
         .sort((a, b) => b[1] - a[1])
         .map(([outcome, count]) => `${outcome} ${count}`)
         .join(", ");
-      return `- ${SHOP_NAMES[report.shopId]} (${report.minutes.toFixed(1)} min): ${report.rows} rows, ${report.batchRequests} batch requests (${report.batchFound} found${report.emptyBatches ? `, ${report.emptyBatches} listed nothing` : ""}), ${report.lookups} single lookups, ${report.hiddenUnchanged} still hidden, ${report.priceChanges} price changes; ${outcomes}`;
+      return `- ${SHOP_NAMES[report.shopId]} (${report.minutes.toFixed(1)} min): ${report.rows} rows, ${report.batchRequests} batch requests (${report.batchFound} found${report.emptyBatches ? `, ${report.emptyBatches} listed nothing` : ""}), ${report.lookups} single lookups, ${report.stockRequests} stock checks, ${report.hiddenUnchanged} still hidden, ${report.priceChanges} price changes; ${outcomes}`;
     }),
     `- Stopped early: ${stopped.length ? stopped.join(", ") : "no"}`,
     `- Failures: ${failures.length}${failures.length ? ` (${[...new Set(failures)].slice(0, 10).join(", ")})` : ""}`,

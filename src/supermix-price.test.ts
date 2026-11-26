@@ -111,14 +111,16 @@ test("prices the linked variant of a product with several variants", () => {
   );
 });
 
-test("hides a linked variant that is out of stock or gone", () => {
-  for (const [variantId, reason] of [
-    ["1421239", "unavailable"],
-    ["999", "variant_not_found"],
-  ] as const) {
-    const result = toSupermixPriceResult(variantProduct(), variantId);
-    assert.equal(result.status === "not_found" && result.reason, reason);
-  }
+test("keeps an out-of-stock variant's price and hides a gone one", () => {
+  const outOfStock = toSupermixPriceResult(variantProduct(), "1421239");
+  assert.equal(outOfStock.status, "ok");
+  assert.equal(outOfStock.status === "ok" && outOfStock.outOfStockOnline, true);
+
+  const inStock = toSupermixPriceResult(variantProduct(), "1421238");
+  assert.equal(inStock.status === "ok" && inStock.outOfStockOnline, false);
+
+  const gone = toSupermixPriceResult(variantProduct(), "999");
+  assert.equal(gone.status === "not_found" && gone.reason, "variant_not_found");
 });
 
 test("extracts the slug only from current Supermix product URLs", () => {
@@ -157,10 +159,16 @@ test("ignores original prices that are not higher than the price", () => {
   assert.equal(result.status === "ok" && result.regularPrice, null);
 });
 
-test("hides removed, out-of-stock and unpriced products", () => {
+test("keeps an out-of-stock product's price, out of stock online", () => {
+  const result = toSupermixPriceResult(product("90", { inStock: false }));
+
+  assert.equal(result.status === "ok" && result.currentPrice, "90.00");
+  assert.equal(result.status === "ok" && result.outOfStockOnline, true);
+});
+
+test("hides removed and unpriced products", () => {
   for (const [input, reason] of [
     [null, "product_not_found"],
-    [product("90", { inStock: false }), "unavailable"],
     [product(null), "price_not_found"],
     [product("0.00"), "price_not_found"],
   ] as const) {

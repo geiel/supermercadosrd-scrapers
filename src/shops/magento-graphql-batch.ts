@@ -7,12 +7,16 @@ import type { FetchWithRetryConfig } from "../types.js";
 // one request instead of one request per product.
 
 const batchResponseSchema = z.object({
-  data: z.object({
-    products: z.object({
-      total_count: z.number().nullable().optional(),
-      items: z.array(z.unknown()).nullable().optional(),
-    }),
-  }),
+  errors: z.array(z.unknown()).nullish(),
+  data: z
+    .object({
+      products: z.object({
+        total_count: z.number().nullable().optional(),
+        items: z.array(z.unknown()).nullable().optional(),
+      }),
+    })
+    // Other fields the query asks for alongside (Merca Jumbo's SourceItems).
+    .passthrough(),
 });
 
 // Magento counted matching products but listed none of them. Nacional's
@@ -27,6 +31,12 @@ export type MagentoGraphqlBatchLookup<T> =
       // gets the same invalid_payload error the single lookup returns.
       items: Map<string, T | null>;
       totalCount: number | null;
+      /** The whole `data` object, for fields asked beside `products`. */
+      data: Record<string, unknown>;
+      /** The response also carried GraphQL errors: what it left out proves nothing. */
+      hasErrors: boolean;
+      /** `items` came as an actual list (not missing or null). */
+      itemsListed: boolean;
     }
   | { ok: false; reason: string };
 
@@ -99,5 +109,26 @@ export async function fetchMagentoGraphqlItemsBySku<T extends { sku: string }>(
     ok: true,
     items,
     totalCount,
+    data: parsed.data.data,
+    hasErrors: (parsed.data.errors?.length ?? 0) > 0,
+    itemsListed: Array.isArray(parsed.data.data.products.items),
   };
+}
+
+// `stock_status` of the online store view the prices come from. In practice
+// these stores leave most out-of-stock products out of GraphQL altogether, so
+// OUT_OF_STOCK is rare; an unknown value means no signal.
+export const magentoStockStatusSchema = z
+  .string()
+  .nullable()
+  .optional()
+  .catch(null);
+
+/** undefined when the status is missing or unknown: the stored value stays. */
+export function magentoOutOfStockOnline(
+  stockStatus: string | null | undefined
+): boolean | undefined {
+  if (stockStatus === "OUT_OF_STOCK") return true;
+  if (stockStatus === "IN_STOCK") return false;
+  return undefined;
 }

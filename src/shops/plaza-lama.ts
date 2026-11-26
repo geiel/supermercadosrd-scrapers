@@ -15,6 +15,8 @@ import type {
 } from "../types.js";
 
 const shopId = 4;
+// The one branch whose catalog and prices we read.
+const PLAZA_LAMA_STORE_REFERENCE = "PL08-D";
 const PLAZA_LAMA_SKU_PATTERN = /-([0-9]{8,14})\/?$/i;
 
 const query = `query GetProductsBySKU($getProductsBySKUInput: GetProductsBySKUInput!) {
@@ -111,7 +113,7 @@ export async function scrapePlazaLamaPrice(
         getProductsBySKUInput: {
           clientId: "PLAZA_LAMA",
           skus: [sku],
-          storeReference: "PL08-D",
+          storeReference: PLAZA_LAMA_STORE_REFERENCE,
         },
       },
       query,
@@ -203,7 +205,7 @@ export async function scrapePlazaLamaPrice(
     shopId,
     String(currentPrice),
     String(first.price),
-    null,
+    PLAZA_LAMA_STORE_REFERENCE,
     undefined,
     undefined,
     purchaseTerms

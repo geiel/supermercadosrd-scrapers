@@ -410,7 +410,14 @@ test("fails a Magento batch that counts products but lists none", async () => {
 
     // SKUs the store does not have: an empty listing it also did not count.
     products = { total_count: 0, items: [] };
-    assert.deepEqual(await lookup(["1"]), { ok: true, items: new Map(), totalCount: 0 });
+    assert.deepEqual(await lookup(["1"]), {
+      ok: true,
+      items: new Map(),
+      totalCount: 0,
+      data: { products: { total_count: 0, items: [] } },
+      hasErrors: false,
+      itemsListed: true,
+    });
   } finally {
     server.close();
   }
