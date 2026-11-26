@@ -250,9 +250,15 @@ test("Merca Jumbo: branches decide out of stock online when they are known", () 
   assert.equal(unread.status === "ok" && "outOfStockOnline" in unread, false);
   assert.equal(unread.status === "ok" && "locations" in unread, false);
 
-  // In no branch at all: stock_status decides.
+  // In no branch at all: stock_status decides, and the old branch rows go with it.
   const nowhere = toMercaJumboPriceResult(product([]) as never, {});
   assert.equal(nowhere.status === "ok" && nowhere.outOfStockOnline, false);
+  assert.deepEqual(nowhere.status === "ok" && nowhere.locations, []);
+
+  // In no branch and no known stock_status: nothing changes.
+  const unknown = toMercaJumboPriceResult({ ...product([]), outOfStockOnline: undefined } as never, {});
+  assert.equal(unknown.status === "ok" && "outOfStockOnline" in unknown, false);
+  assert.equal(unknown.status === "ok" && "locations" in unknown, false);
 });
 
 test("CCN: what REST leaves unsaid never hides an offer", () => {

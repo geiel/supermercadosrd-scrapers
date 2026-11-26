@@ -479,18 +479,22 @@ export async function fetchMercaJumboProductsBySkus(
     items: new Map(
       [...lookup.items].map(([sku, item]) => {
         if (item === null) return [sku, null];
-        const locations = sourceItems ? mercaJumboLocations(sourceItems, sku) : undefined;
-        return [sku, { ...toMercaJumboProduct(item), ...(locations ? { locations } : {}) }];
+        return [
+          sku,
+          {
+            ...toMercaJumboProduct(item),
+            ...(sourceItems ? { locations: mercaJumboLocations(sourceItems, sku) } : {}),
+          },
+        ];
       })
     ),
   };
 }
 
-/** Its branch rows; undefined when no branch lists it at all (nothing proven: the stored ones stay). */
-function mercaJumboLocations(sourceItems: SourceItem[], sku: string): ScrapeLocationAvailability[] | undefined {
-  const rows = sourceItems.filter((item) => item.sku === sku);
-  if (rows.length === 0) return undefined;
-  return rows
+/** Its branch rows; empty when the branches were read and none lists it. */
+function mercaJumboLocations(sourceItems: SourceItem[], sku: string): ScrapeLocationAvailability[] {
+  return sourceItems
+    .filter((item) => item.sku === sku)
     .map((item) => ({
       externalId: item.code,
       available: item.status === 1,

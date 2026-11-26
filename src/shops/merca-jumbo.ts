@@ -73,15 +73,17 @@ export function toMercaJumboPriceResult(
     ),
     // With branches, out of stock online only when none has it. Without them
     // (they could not be read) nothing changes: the stored flag goes with the
-    // stored branches. A product in no branch at all goes by stock_status.
+    // stored branches.
+    // Listed with no branch rows: the flag and the (empty) branches change
+    // together, and only when stock_status says which way; otherwise the
+    // stored ones stay, so a product back in stock never keeps a stale flag
+    // and an unknown status never empties its branches.
     product.locations === undefined
       ? {}
-      : {
-          locations: product.locations,
-          outOfStockOnline:
-            product.locations.length > 0
-              ? !product.locations.some(locationInStock)
-              : product.outOfStockOnline,
-        }
+      : product.locations.length > 0
+        ? { locations: product.locations, outOfStockOnline: !product.locations.some(locationInStock) }
+        : product.outOfStockOnline === undefined
+          ? {}
+          : { locations: [], outOfStockOnline: product.outOfStockOnline }
   );
 }
