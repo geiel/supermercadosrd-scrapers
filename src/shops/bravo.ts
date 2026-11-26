@@ -113,13 +113,12 @@ export function bravoPriceFromPayload(
       undefined,
       purchaseTerms
     ),
-    {
-      locations,
-      // Bravo sells online from every branch: out of stock online only when
-      // no branch has it.
-      outOfStockOnline:
-        locations.length === 0 ? null : !locations.some(bravoLocationInStock),
-    }
+    // Bravo sells online from every branch: out of stock online only when no
+    // branch has it. Without availability fields nothing is known, and the
+    // stored branches stay.
+    locations.length === 0
+      ? {}
+      : { locations, outOfStockOnline: !locations.some(bravoLocationInStock) }
   );
 }
 

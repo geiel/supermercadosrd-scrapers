@@ -208,8 +208,23 @@ async function touchHiddenRows(shopId: BatchPriceShopId, rows: ShopPriceRow[]) {
 }
 
 type ChunkOutcome =
-  | { ok: true; results: Map<ShopPriceRow, ScrapePriceResult> }
+  | {
+      ok: true;
+      results: Map<ShopPriceRow, ScrapePriceResult>;
+      // Magento stores: every SKU the response listed (valid or not), and
+      // whether it listed all it counted. Only a row whose SKUs a complete
+      // response did not list at all is out of stock or gone.
+      listed?: Set<string>;
+      complete?: boolean;
+    }
   | { ok: false; reason: string };
+
+function magentoListing(lookup: { items: Map<string, unknown>; totalCount: number | null }) {
+  return {
+    listed: new Set(lookup.items.keys()),
+    complete: lookup.totalCount === null || lookup.totalCount <= lookup.items.size,
+  };
+}
 
 function mapResults<T>(
   matches: Map<ShopPriceRow, T>,
@@ -255,6 +270,7 @@ async function priceChunk(
         results: mapResults(matchSkuItems(chunk.rows, lookup.items), (item) =>
           toNacionalGraphqlPriceResult(item)
         ),
+        ...magentoListing(lookup),
       };
     }
     case 3: {
@@ -269,6 +285,7 @@ async function priceChunk(
           matchSkuItems(chunk.rows, lookup.items),
           toJumboPriceResult
         ),
+        ...magentoListing(lookup),
       };
     }
     case 7: {
@@ -286,6 +303,7 @@ async function priceChunk(
           matchSkuItems(chunk.rows, lookup.items),
           toMercaJumboPriceResult
         ),
+        ...magentoListing(lookup),
       };
     }
   }
@@ -621,10 +639,15 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
       for (const row of chunk.rows) {
         const result = outcome.results.get(row);
         if (!result) {
-          // Left out of a good response: Nacional, Jumbo and Merca Jumbo
-          // rows get the REST stock check; otherwise visible rows get the
-          // single lookup and hidden ones stay hidden until they show up again.
-          if (isCcnStockShop(shopId)) {
+          // Left out of a good, complete response: Nacional, Jumbo and Merca
+          // Jumbo rows get the REST stock check. A listed but unreadable item
+          // or a truncated listing proves nothing: those rows, and other
+          // stores', go the old way (visible ones get the single lookup,
+          // hidden ones stay hidden until they show up again).
+          const listedButUnread =
+            outcome.listed !== undefined &&
+            (batchLookupKeys(row)?.keys ?? []).some((key) => outcome.listed!.has(key));
+          if (isCcnStockShop(shopId) && outcome.complete !== false && !listedButUnread) {
             leftOut.push(row);
           } else if (row.hidden) {
             stillHidden.push(row);
@@ -656,14 +679,17 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
         options.batchSize
       );
       for (const chunk of stockChunks) {
-        const fallBack = () => {
+        // Without a REST answer nothing is known: prices stay, nothing is
+        // hidden, and hidden rows keep their check time so the next run
+        // asks again. (The single lookups would hide what is only out of
+        // stock: Jumbo's and Merca's ask GraphQL again.)
+        const fallBack = (reason: string) => {
           for (const row of chunk.rows) {
-            if (row.hidden) stillHidden.push(row);
-            else missing.push(row);
+            record(row, error(shopId, reason, true, false), "stock");
           }
         };
         if (stoppedReason) {
-          fallBack();
+          fallBack("skipped_stock_check");
           continue;
         }
 
@@ -675,19 +701,28 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
           console.error(
             `[ERROR] ${shopName} stock check of ${chunk.rows.length} rows failed reason=${lookup.reason}`
           );
-          fallBack();
+          report.failures.push(`stock_check:${lookup.reason}`);
+          fallBack(lookup.reason);
           continue;
         }
 
         const matches = matchSkuItems(chunk.rows, lookup.items);
         const writes = [];
         for (const row of chunk.rows) {
+          const keys = batchLookupKeys(row)?.keys ?? [];
           const item = matches.get(row);
-          const write = settle(
-            row,
-            item ? toCcnLeftOutResult(shopId, item) : notFound(shopId, "product_not_found", true),
-            "stock"
-          );
+          // A SKU REST listed but could not read says nothing; one it did not
+          // list at all (in a complete answer) is gone.
+          const result = item
+            ? toCcnLeftOutResult(shopId, item)
+            : keys.some((key) => lookup.items.has(key))
+              ? error(shopId, "invalid_stock_item", false, false)
+              : notFound(shopId, "product_not_found", true);
+          if (result.status === "error") {
+            record(row, result, "stock");
+            continue;
+          }
+          const write = settle(row, result, "stock");
           if (write) writes.push(write);
         }
         writeResults(writes);

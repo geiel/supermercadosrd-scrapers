@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { fetchWithRetryDetailed, getNacionalHeaders } from "../http-client.js";
-import { notFound, ok, withStock } from "../result.js";
+import { error, notFound, ok, withStock } from "../result.js";
 import type { FetchWithRetryConfig, ScrapePriceResult } from "../types.js";
 import { resolveJumboStoreCode } from "./jumbo-shared.js";
 import { resolveMercaJumboStoreCode } from "./merca-jumbo-shared.js";
@@ -43,13 +43,19 @@ const restItemSchema = z.object({
 
 export type CcnRestItem = z.infer<typeof restItemSchema>;
 
-const restResponseSchema = z.object({ items: z.array(z.unknown()).nullish() });
+const restResponseSchema = z.object({
+  items: z.array(z.unknown()).nullish(),
+  total_count: z.number().nullish(),
+});
 
 export async function fetchCcnRestProductsBySkus(
   shopId: CcnStockShopId,
   skus: string[],
   requestConfig?: FetchWithRetryConfig
-): Promise<{ ok: true; items: Map<string, CcnRestItem> } | { ok: false; reason: string }> {
+): Promise<
+  // null marks a SKU REST listed but whose item could not be read.
+  { ok: true; items: Map<string, CcnRestItem | null> } | { ok: false; reason: string }
+> {
   const params = new URLSearchParams({
     "searchCriteria[filter_groups][0][filters][0][field]": "sku",
     "searchCriteria[filter_groups][0][filters][0][value]": skus.join(","),
@@ -77,10 +83,21 @@ export async function fetchCcnRestProductsBySkus(
   const parsed = restResponseSchema.safeParse(await response.json().catch(() => null));
   if (!parsed.success) return { ok: false, reason: "invalid_payload" };
 
-  const items = new Map<string, CcnRestItem>();
-  for (const raw of parsed.data.items ?? []) {
+  const rawItems = parsed.data.items ?? [];
+  // Counted more than it listed: an incomplete answer is no proof of anything.
+  if (typeof parsed.data.total_count !== "number" || parsed.data.total_count > rawItems.length) {
+    return { ok: false, reason: "incomplete_listing" };
+  }
+
+  const items = new Map<string, CcnRestItem | null>();
+  for (const raw of rawItems) {
     const item = restItemSchema.safeParse(raw);
-    if (item.success) items.set(item.data.sku, item.data);
+    if (item.success) {
+      items.set(item.data.sku, item.data);
+      continue;
+    }
+    const sku = (raw as { sku?: unknown } | null)?.sku;
+    if (typeof sku === "string" && !items.has(sku)) items.set(sku, null);
   }
   return { ok: true, items };
 }
@@ -98,16 +115,24 @@ export function toCcnLeftOutResult(
   item: CcnRestItem,
   now = new Date()
 ): ScrapePriceResult {
-  const onWebsite = (item.extension_attributes?.website_ids ?? []).some(
-    (websiteId) => Number(websiteId) === CCN_STOCK_STORES[shopId].websiteId
-  );
-  if (Number(item.status) !== 1 || !onWebsite) {
+  // Disabled (2) or off this store's website: gone. Anything REST leaves
+  // unsaid (no status, no websites, no price) proves nothing: the stored
+  // price stays and nothing is hidden.
+  const status = Number(item.status);
+  const websiteIds = item.extension_attributes?.website_ids;
+  if (status === 2) {
+    return notFound(shopId, "product_not_found", true);
+  }
+  if (status !== 1 || !Array.isArray(websiteIds)) {
+    return error(shopId, "stock_unknown", false, false);
+  }
+  if (!websiteIds.some((websiteId) => Number(websiteId) === CCN_STOCK_STORES[shopId].websiteId)) {
     return notFound(shopId, "product_not_found", true);
   }
 
   const regularPrice = parsePrice(item.price);
   if (regularPrice === null || regularPrice <= 0) {
-    return notFound(shopId, "price_not_found", true);
+    return error(shopId, "price_not_found", false, false);
   }
 
   const specialPrice = parsePrice(attribute(item, "special_price"));

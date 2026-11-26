@@ -78,37 +78,42 @@ test("Bravo: out of stock online only when no branch has it", () => {
   );
 });
 
-test("Bravo: no availability fields means no signal", () => {
+test("Bravo: no availability fields means nothing is known", () => {
   const result = bravoPriceFromPayload(bravoPayload([{ id: 1000 }]), input);
 
-  assert.equal(result.status === "ok" && result.outOfStockOnline, null);
-  assert.deepEqual(result.status === "ok" && result.locations, []);
+  assert.equal(result.status === "ok" && "outOfStockOnline" in result, false);
+  assert.equal(result.status === "ok" && "locations" in result, false);
 });
 
-test("PriceSmart: one row per Dominican club with a known availability", () => {
-  const candidate = (club: string | undefined, available: boolean | null, country = "DO") => ({
-    country,
+test("PriceSmart: one row per Dominican club with a known availability, priced or not", () => {
+  const candidate = (club: string) => ({
+    country: "DO",
     club,
     currentPrice: "1250",
     regularPrice: "1400",
-    available,
+    available: true,
     soldByWeight: null,
     sourceUnit: null,
     parsedSourceUnit: null,
   });
+  const availability = (club: string | undefined, value: unknown, country = "DO") => ({ country, club, value });
 
-  const clubs = pricesmartClubLocations([
-    candidate("6801", false),
-    candidate("6804", true),
-    candidate("68", true),
-    candidate("6805", null),
-    candidate("7001", true, "CR"),
-    candidate("6801", true),
-  ]);
+  const clubs = pricesmartClubLocations(
+    [
+      availability("6801", "false"),
+      availability("6804", "true"),
+      availability("68", "true"),
+      availability("6805", null),
+      availability("7001", "true", "CR"),
+      availability("6801", "true"),
+    ],
+    // Only Los Prados has a price: Arroyo Hondo's availability still counts.
+    [candidate("6801")]
+  );
 
   assert.deepEqual(clubs, [
     { externalId: "6801", available: false, stock: null, currentPrice: "1250", regularPrice: "1400" },
-    { externalId: "6804", available: true, stock: null, currentPrice: "1250", regularPrice: "1400" },
+    { externalId: "6804", available: true, stock: null, currentPrice: null, regularPrice: null },
   ]);
 });
 
@@ -235,4 +240,16 @@ test("Merca Jumbo: branches decide out of stock online when they are known", () 
   const unread = toMercaJumboPriceResult(product() as never, {});
   assert.equal(unread.status === "ok" && unread.outOfStockOnline, false);
   assert.equal(unread.status === "ok" && "locations" in unread, false);
+});
+
+test("CCN: what REST leaves unsaid never hides an offer", () => {
+  const unknownSite = toCcnLeftOutResult(3, { sku: "1", status: 1, price: 10 });
+  assert.equal(unknownSite.status === "error" && unknownSite.hide, false);
+  const noStatus = toCcnLeftOutResult(3, { sku: "1", price: 10, extension_attributes: { website_ids: [51] } });
+  assert.equal(noStatus.status === "error" && noStatus.hide, false);
+  const noPrice = toCcnLeftOutResult(3, { sku: "1", status: 1, extension_attributes: { website_ids: [51] } });
+  assert.equal(noPrice.status === "error" && noPrice.hide, false);
+  // Merca's left-out product: no branch has it.
+  const merca = toCcnLeftOutResult(7, { sku: "1", status: 1, price: 10, extension_attributes: { website_ids: [59] } });
+  assert.deepEqual(merca.status === "ok" && merca.locations, []);
 });

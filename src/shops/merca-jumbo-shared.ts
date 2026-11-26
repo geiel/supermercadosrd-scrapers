@@ -75,19 +75,19 @@ function mercaJumboProductsBySkuQuery(sourceCodes: string[]) {
 }`;
 }
 
+// A field without its list, or a row without status, is not an empty branch:
+// the whole batch then carries no branches and the stored ones stay.
 const sourceItemsSchema = z.object({
-  items: z
-    .array(
-      z.object({
-        sku: z.string(),
-        quantity: z.number().nullish(),
-        status: z.number().nullish(),
-      })
-    )
-    .nullish(),
+  items: z.array(
+    z.object({
+      sku: z.string(),
+      quantity: z.number().nullish(),
+      status: z.number(),
+    })
+  ),
 });
 
-type SourceItem = { code: string; sku: string; quantity: number | null; status: number | null };
+type SourceItem = { code: string; sku: string; quantity: number | null; status: number };
 
 /** The branch rows of these fields, or null when any field is missing (then no branch is known). */
 function readSourceItems(data: Record<string, unknown>, codes: string[]): SourceItem[] | null {
@@ -95,8 +95,8 @@ function readSourceItems(data: Record<string, unknown>, codes: string[]): Source
   for (const [index, code] of codes.entries()) {
     const parsed = sourceItemsSchema.safeParse(data[index === 0 ? "SourceItems" : `s${code}`]);
     if (!parsed.success) return null;
-    for (const item of parsed.data.items ?? []) {
-      rows.push({ code, sku: item.sku, quantity: item.quantity ?? null, status: item.status ?? null });
+    for (const item of parsed.data.items) {
+      rows.push({ code, sku: item.sku, quantity: item.quantity ?? null, status: item.status });
     }
   }
   return rows;
@@ -126,7 +126,9 @@ async function mercaJumboSourceCodes(
     .object({ data: z.object({ InventorySources: z.array(z.object({ source_code: z.string() })) }) })
     .safeParse(response?.ok ? await response.json().catch(() => null) : null);
   if (!parsed.success) {
-    console.error("[MERCA] branches could not be read: prices only this time");
+    // Not asked again this run: prices alone, one request per batch.
+    console.error("[MERCA] branches could not be read: prices only this run");
+    sourceCodesByStore.set(storeCode, []);
     return [];
   }
 
@@ -145,9 +147,9 @@ async function fetchRemainingSourceItems(
   skus: string[],
   codes: string[],
   requestConfig?: FetchWithRetryConfig
-): Promise<SourceItem[] | null> {
+): Promise<SourceItem[] | { failed: string } | null> {
   await randomDelay(1000, 1500);
-  const { response } = await fetchWithRetryDetailed(
+  const { response, failureReason } = await fetchWithRetryDetailed(
     apiUrl,
     {
       method: "POST",
@@ -159,11 +161,14 @@ async function fetchRemainingSourceItems(
     },
     requestConfig
   );
-  const parsed = z
-    .object({ data: z.record(z.unknown()) })
-    .safeParse(response?.ok ? await response.json().catch(() => null) : null);
+  // The store pushing back must stop the batch queue like any request does.
+  if (!response) return { failed: failureReason };
+  if (!response.ok) return { failed: `http_${response.status}` };
+  const parsed = z.object({ data: z.record(z.unknown()) }).safeParse(await response.json().catch(() => null));
   return parsed.success ? readSourceItems(parsed.data.data, codes) : null;
 }
+
+const BACKOFF_STATUSES = new Set(["http_403", "http_429", "http_503"]);
 
 const mercaJumboProductItemSchema = z
   .object({
@@ -445,7 +450,12 @@ export async function fetchMercaJumboProductsBySkus(
   let sourceItems = sourceCodes.length > 0 ? readSourceItems(lookup.data, firstCodes) : null;
   if (sourceItems && restCodes.length > 0) {
     const rest = await fetchRemainingSourceItems(apiUrl, storeCode, input.skus, restCodes, requestConfig);
-    sourceItems = rest ? [...sourceItems, ...rest] : null;
+    if (rest && "failed" in rest) {
+      if (BACKOFF_STATUSES.has(rest.failed)) return { ok: false, reason: rest.failed };
+      sourceItems = null;
+    } else {
+      sourceItems = rest ? [...sourceItems, ...rest] : null;
+    }
   }
 
   return {

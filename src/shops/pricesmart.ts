@@ -520,12 +520,13 @@ export async function scrapePricesmartPrice(
     (attr) => attr.name === "sold_by_weight"
   );
 
+  const availabilityEntries = parseLocationAttributes(availabilityRaw?.value);
   const locationCandidates = buildLocationCandidates({
     productPrice,
     originalPrice,
     weightEntries: parseLocationAttributes(weightRaw?.value),
     weightUnitEntries: parseLocationAttributes(weightUnitRaw?.value),
-    availabilityEntries: parseLocationAttributes(availabilityRaw?.value),
+    availabilityEntries,
     soldByWeightEntries: parseLocationAttributes(soldByWeightRaw?.value),
   });
   const currentPrice = selectLocationCandidate(locationCandidates, input);
@@ -556,7 +557,7 @@ export async function scrapePricesmartPrice(
     return error(shopId, "source_unit_mismatch", false, true);
   }
 
-  const locations = pricesmartClubLocations(locationCandidates);
+  const locations = pricesmartClubLocations(availabilityEntries, locationCandidates);
 
   return withStock(
     ok(
@@ -577,28 +578,40 @@ export async function scrapePricesmartPrice(
   );
 }
 
-/** Each Dominican club with a known availability; "68" is the country, not a club. */
+/**
+ * Each Dominican club with a known availability, from product_availability
+ * (a club out of stock may carry no price of its own), with its price when it
+ * has one; "68" is the country, not a club.
+ */
 export function pricesmartClubLocations(
+  availabilityEntries: PricesmartLocationAttribute[],
   candidates: PricesmartLocationCandidate[]
 ): ScrapeLocationAvailability[] {
   const clubs = new Map<string, ScrapeLocationAvailability>();
-  for (const candidate of candidates) {
+  for (const entry of availabilityEntries) {
+    const club = entry.club;
+    const available = parseBooleanAttribute(
+      entry.value === undefined || entry.value === null ? null : String(entry.value)
+    );
     if (
-      candidate.country !== "DO" ||
-      !candidate.club ||
-      candidate.club === PRICESMART_DO_DEFAULT_LOCATION_ID ||
-      candidate.available === null ||
-      clubs.has(candidate.club)
+      entry.country !== "DO" ||
+      !club ||
+      club === PRICESMART_DO_DEFAULT_LOCATION_ID ||
+      available === null ||
+      clubs.has(club)
     ) {
       continue;
     }
 
-    clubs.set(candidate.club, {
-      externalId: candidate.club,
-      available: candidate.available,
+    const priced = candidates.find(
+      (candidate) => candidate.country === "DO" && candidate.club === club
+    );
+    clubs.set(club, {
+      externalId: club,
+      available,
       stock: null,
-      currentPrice: candidate.currentPrice,
-      regularPrice: candidate.regularPrice ?? null,
+      currentPrice: priced?.currentPrice ?? null,
+      regularPrice: priced?.regularPrice ?? null,
     });
   }
 
