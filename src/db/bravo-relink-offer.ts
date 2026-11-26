@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "./client.js";
-import { productsShopsPrices } from "./schema.js";
+import { productsShopsLocations, productsShopsPrices } from "./schema.js";
 import {
   bravoArticleApi,
   bravoArticleIdFromApi,
@@ -178,9 +178,10 @@ export async function relinkBravoOffer(row: RelinkRow): Promise<BravoRelinkOutco
     if (await articleOnAnotherProduct(tx, row.productId, newArticleId)) {
       return "article_claimed" as const;
     }
+    // The old article's stock is not the new one's: its result writes its own.
     const updated = await tx
       .update(productsShopsPrices)
-      .set({ api })
+      .set({ api, outOfStockOnline: null })
       .where(
         and(
           eq(productsShopsPrices.productId, row.productId),
@@ -189,7 +190,16 @@ export async function relinkBravoOffer(row: RelinkRow): Promise<BravoRelinkOutco
         )
       )
       .returning({ productId: productsShopsPrices.productId });
-    return updated.length > 0 ? ("claimed" as const) : ("offer_changed" as const);
+    if (updated.length === 0) return "offer_changed" as const;
+    await tx
+      .delete(productsShopsLocations)
+      .where(
+        and(
+          eq(productsShopsLocations.productId, row.productId),
+          eq(productsShopsLocations.shopId, BRAVO_SHOP_ID)
+        )
+      );
+    return "claimed" as const;
   });
 
   if (claim === "offer_changed") {

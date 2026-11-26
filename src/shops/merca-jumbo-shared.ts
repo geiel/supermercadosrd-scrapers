@@ -54,6 +54,7 @@ const mercaJumboProductQuery = `query MercaJumboProductBySku($sku: String!) {
 // 2026-11-26) in a second request. The batch sync asks 100 products at a time
 // for Merca Jumbo, so this costs the same requests as prices alone at 50.
 const SOURCES_PER_REQUEST = 11;
+const BACKOFF_STATUSES = new Set(["http_403", "http_429", "http_503"]);
 
 function sourceItemsFields(codes: string[]) {
   return codes
@@ -109,7 +110,7 @@ async function mercaJumboSourceCodes(
   apiUrl: string,
   storeCode: string,
   requestConfig?: FetchWithRetryConfig
-): Promise<string[]> {
+): Promise<string[] | { failed: string }> {
   const known = sourceCodesByStore.get(storeCode);
   if (known) return known;
 
@@ -122,6 +123,10 @@ async function mercaJumboSourceCodes(
     },
     requestConfig
   );
+  // The store pushing back stops the batch queue, as any request does.
+  if (response && BACKOFF_STATUSES.has(`http_${response.status}`)) {
+    return { failed: `http_${response.status}` };
+  }
   const parsed = z
     .object({ data: z.object({ InventorySources: z.array(z.object({ source_code: z.string() })) }) })
     .safeParse(response?.ok ? await response.json().catch(() => null) : null);
@@ -167,8 +172,6 @@ async function fetchRemainingSourceItems(
   const parsed = z.object({ data: z.record(z.unknown()) }).safeParse(await response.json().catch(() => null));
   return parsed.success ? readSourceItems(parsed.data.data, codes) : null;
 }
-
-const BACKOFF_STATUSES = new Set(["http_403", "http_429", "http_503"]);
 
 const mercaJumboProductItemSchema = z
   .object({
@@ -428,7 +431,9 @@ export async function fetchMercaJumboProductsBySkus(
     return { ok: false, reason: "missing_store_code" };
   }
 
-  const sourceCodes = await mercaJumboSourceCodes(apiUrl, storeCode, requestConfig);
+  const sources = await mercaJumboSourceCodes(apiUrl, storeCode, requestConfig);
+  if (!Array.isArray(sources)) return { ok: false, reason: sources.failed };
+  const sourceCodes = sources;
   const firstCodes = sourceCodes.slice(0, SOURCES_PER_REQUEST);
   const restCodes = sourceCodes.slice(SOURCES_PER_REQUEST);
   const lookup = await fetchMagentoGraphqlItemsBySku(

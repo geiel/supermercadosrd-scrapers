@@ -136,9 +136,12 @@ function bravoRegularPrice(tienda: BravoTienda) {
 /** In stock at a branch: Bravo says it is available and has units left. */
 export const bravoLocationInStock = locationInStock;
 
+/** Every branch with its availability, or none when any branch leaves it out (a partial answer replaces nothing). */
 function bravoLocations(tiendas: BravoTienda[]): ScrapeLocationAvailability[] {
+  if (tiendas.some((tienda) => typeof tienda.disponibleArticuloTienda !== "boolean")) {
+    return [];
+  }
   return tiendas
-    .filter((tienda) => typeof tienda.disponibleArticuloTienda === "boolean")
     .map((tienda) => ({
       externalId: String(tienda.idTiendaArticuloTienda),
       available: tienda.disponibleArticuloTienda === true,

@@ -71,13 +71,17 @@ export function toMercaJumboPriceResult(
       undefined,
       purchaseTerms
     ),
-    {
-      // With branches, out of stock online only when none has it.
-      outOfStockOnline:
-        product.locations && product.locations.length > 0
-          ? !product.locations.some(locationInStock)
-          : product.outOfStockOnline,
-      locations: product.locations,
-    }
+    // With branches, out of stock online only when none has it. Without them
+    // (they could not be read) nothing changes: the stored flag goes with the
+    // stored branches. A product in no branch at all goes by stock_status.
+    product.locations === undefined
+      ? {}
+      : {
+          locations: product.locations,
+          outOfStockOnline:
+            product.locations.length > 0
+              ? !product.locations.some(locationInStock)
+              : product.outOfStockOnline,
+        }
   );
 }

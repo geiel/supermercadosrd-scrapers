@@ -78,6 +78,15 @@ test("Bravo: out of stock online only when no branch has it", () => {
   );
 });
 
+test("Bravo: a branch without availability makes the whole answer unknown", () => {
+  const partial = bravoPriceFromPayload(
+    bravoPayload([{ id: 1000, disponible: false, stock: 0 }, { id: 1010 }]),
+    input
+  );
+  assert.equal(partial.status === "ok" && "outOfStockOnline" in partial, false);
+  assert.equal(partial.status === "ok" && "locations" in partial, false);
+});
+
 test("Bravo: no availability fields means nothing is known", () => {
   const result = bravoPriceFromPayload(bravoPayload([{ id: 1000 }]), input);
 
@@ -236,10 +245,14 @@ test("Merca Jumbo: branches decide out of stock online when they are known", () 
   ]) as never, {});
   assert.equal(none.status === "ok" && none.outOfStockOnline, true);
 
-  // Branches unread: stock_status decides and the stored branch rows stay.
+  // Branches unread: the stored flag and branch rows stay together.
   const unread = toMercaJumboPriceResult(product() as never, {});
-  assert.equal(unread.status === "ok" && unread.outOfStockOnline, false);
+  assert.equal(unread.status === "ok" && "outOfStockOnline" in unread, false);
   assert.equal(unread.status === "ok" && "locations" in unread, false);
+
+  // In no branch at all: stock_status decides.
+  const nowhere = toMercaJumboPriceResult(product([]) as never, {});
+  assert.equal(nowhere.status === "ok" && nowhere.outOfStockOnline, false);
 });
 
 test("CCN: what REST leaves unsaid never hides an offer", () => {

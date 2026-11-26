@@ -89,6 +89,11 @@ export async function fetchCcnRestProductsBySkus(
     return { ok: false, reason: "incomplete_listing" };
   }
 
+  // An item without its SKU could be any of the asked ones: nothing proven.
+  if (rawItems.some((raw) => typeof (raw as { sku?: unknown } | null)?.sku !== "string")) {
+    return { ok: false, reason: "unidentified_items" };
+  }
+
   const items = new Map<string, CcnRestItem | null>();
   for (const raw of rawItems) {
     const item = restItemSchema.safeParse(raw);

@@ -569,12 +569,18 @@ export async function scrapePricesmartPrice(
       unitUpdate,
       null
     ),
-    {
-      locations,
-      // Out of stock online only when no club in the country has it.
-      outOfStockOnline:
-        locations.length === 0 ? null : !locations.some((club) => club.available),
-    }
+    // Out of stock online only when no club in the country has it. A priced
+    // club without a known availability means a partial answer: nothing is
+    // known then, and the stored clubs stay.
+    locations.length === 0 ||
+      locationCandidates.some(
+        (candidate) =>
+          candidate.club &&
+          candidate.club !== PRICESMART_DO_DEFAULT_LOCATION_ID &&
+          !locations.some((club) => club.externalId === candidate.club)
+      )
+      ? {}
+      : { locations, outOfStockOnline: !locations.some((club) => club.available) }
   );
 }
 

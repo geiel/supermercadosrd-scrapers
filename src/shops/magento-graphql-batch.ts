@@ -7,6 +7,7 @@ import type { FetchWithRetryConfig } from "../types.js";
 // one request instead of one request per product.
 
 const batchResponseSchema = z.object({
+  errors: z.array(z.unknown()).nullish(),
   data: z
     .object({
       products: z.object({
@@ -32,6 +33,8 @@ export type MagentoGraphqlBatchLookup<T> =
       totalCount: number | null;
       /** The whole `data` object, for fields asked beside `products`. */
       data: Record<string, unknown>;
+      /** The response also carried GraphQL errors: what it left out proves nothing. */
+      hasErrors: boolean;
     }
   | { ok: false; reason: string };
 
@@ -105,6 +108,7 @@ export async function fetchMagentoGraphqlItemsBySku<T extends { sku: string }>(
     items,
     totalCount,
     data: parsed.data.data,
+    hasErrors: (parsed.data.errors?.length ?? 0) > 0,
   };
 }
 

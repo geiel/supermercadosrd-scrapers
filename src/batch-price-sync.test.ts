@@ -415,6 +415,7 @@ test("fails a Magento batch that counts products but lists none", async () => {
       items: new Map(),
       totalCount: 0,
       data: { products: { total_count: 0, items: [] } },
+      hasErrors: false,
     });
   } finally {
     server.close();
