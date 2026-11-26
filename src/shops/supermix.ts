@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { buildPurchaseTerms, type PurchaseTerms } from "../purchase-terms.js";
-import { error, notFound, ok } from "../result.js";
+import { error, notFound, ok, withStock } from "../result.js";
 import type {
   FetchWithRetryConfig,
   ScrapePriceInput,
@@ -150,10 +150,8 @@ function toPrice(
   inStock: boolean,
   pricing: { price: { amount: string } | null; original_price: { amount: string } | null }
 ): ScrapePriceResult {
-  if (!inStock) {
-    return notFound(shopId, "unavailable", true);
-  }
-
+  // Out of stock online keeps its price and stays visible, labeled as such;
+  // only a product Supermix no longer lists (404) is hidden.
   const currentPrice = toPositivePrice(pricing.price?.amount);
   if (!currentPrice) {
     return notFound(shopId, "price_not_found", true);
@@ -165,7 +163,10 @@ function toPrice(
       ? originalPrice
       : null;
 
-  return ok(shopId, currentPrice, regularPrice, null, buildSupermixProductUrl(slug));
+  return withStock(
+    ok(shopId, currentPrice, regularPrice, null, buildSupermixProductUrl(slug)),
+    { outOfStockOnline: !inStock }
+  );
 }
 
 export const SUPERMIX_PURCHASE_TERMS_SOURCE = "supermix_vendabo_product";

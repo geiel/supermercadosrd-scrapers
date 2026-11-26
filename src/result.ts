@@ -71,3 +71,19 @@ export function error(
     hide,
   };
 }
+
+/** Adds the stock signals to an ok result (other results pass through). */
+export function withStock<T extends ScrapePriceSuccess | ScrapePriceNotFound | ScrapePriceError>(
+  result: T,
+  stock: Pick<ScrapePriceSuccess, "outOfStockOnline" | "locations">
+): T {
+  if (result.status !== "ok") {
+    return result;
+  }
+
+  return {
+    ...result,
+    outOfStockOnline: stock.outOfStockOnline,
+    ...(stock.locations !== undefined ? { locations: stock.locations } : {}),
+  } as T;
+}

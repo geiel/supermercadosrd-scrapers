@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { buildPurchaseTerms, type PurchaseTerms } from "../purchase-terms.js";
-import { error, notFound, ok } from "../result.js";
+import { error, notFound, ok, withStock } from "../result.js";
 import type {
   FetchWithRetryConfig,
   ScrapePriceInput,
@@ -112,11 +112,8 @@ function toPrice(
 ): ScrapePriceResult {
   // `disable_buy_button` products cannot be ordered: the product page has no
   // quantity or add-to-cart button. Olé does not manage stock (in_stock is
-  // always true), so this is the only availability signal.
-  if (unavailable) {
-    return notFound(shopId, "unavailable", true);
-  }
-
+  // always true), so this is the only availability signal. Such a product
+  // keeps its price, labeled out of stock online; a 404 is what hides it.
   const currentPrice = toPositivePrice(priceValue);
   if (!currentPrice) {
     return notFound(shopId, "price_not_found", true);
@@ -126,14 +123,17 @@ function toPrice(
   const regularPrice =
     oldPrice && Number(oldPrice) > Number(currentPrice) ? oldPrice : null;
 
-  return ok(
-    shopId,
-    currentPrice,
-    regularPrice,
-    null,
-    buildOleProductUrl(seName),
-    undefined,
-    purchaseTerms
+  return withStock(
+    ok(
+      shopId,
+      currentPrice,
+      regularPrice,
+      null,
+      buildOleProductUrl(seName),
+      undefined,
+      purchaseTerms
+    ),
+    { outOfStockOnline: unavailable }
   );
 }
 

@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { fetchWithRetry, getBravoHeaders } from "../http-client.js";
-import { error, notFound, ok } from "../result.js";
+import { error, notFound, ok, withStock } from "../result.js";
 import type {
   FetchWithRetryConfig,
+  ScrapeLocationAvailability,
   ScrapePriceInput,
   ScrapePriceResult,
 } from "../types.js";
@@ -28,6 +29,8 @@ const productSchema = z
         z.object({
           idTiendaArticuloTienda: z.number(),
           pvpArticuloTienda: z.number(),
+          disponibleArticuloTienda: z.boolean().nullish(),
+          stockArticuloTienda: z.number().nullish(),
           associatedOferta: z.array(
             z.object({
               precioReferenciaArticuloTiendaOferta: z.number(),
@@ -98,18 +101,59 @@ export function bravoPriceFromPayload(
 
   const data = parsed.data.data;
   const purchaseTerms = extractBravoPurchaseTerms(data, input);
+  const locations = bravoLocations(data.associatedTienda);
 
-  return ok(
-    shopId,
-    String(selected.pvpArticuloTienda),
-    selected.associatedOferta[0]
-      ? String(selected.associatedOferta[0].precioReferenciaArticuloTiendaOferta)
-      : null,
-    null,
-    undefined,
-    undefined,
-    purchaseTerms
+  return withStock(
+    ok(
+      shopId,
+      String(selected.pvpArticuloTienda),
+      bravoRegularPrice(selected),
+      String(selected.idTiendaArticuloTienda),
+      undefined,
+      undefined,
+      purchaseTerms
+    ),
+    {
+      locations,
+      // Bravo sells online from every branch: out of stock online only when
+      // no branch has it.
+      outOfStockOnline:
+        locations.length === 0 ? null : !locations.some(bravoLocationInStock),
+    }
   );
+}
+
+type BravoTienda = Extract<
+  z.infer<typeof productSchema>,
+  { data: unknown }
+>["data"]["associatedTienda"][number];
+
+function bravoRegularPrice(tienda: BravoTienda) {
+  return tienda.associatedOferta[0]
+    ? String(tienda.associatedOferta[0].precioReferenciaArticuloTiendaOferta)
+    : null;
+}
+
+/** In stock at a branch: Bravo says it is available and has units left. */
+export function bravoLocationInStock(location: ScrapeLocationAvailability) {
+  return location.available && (location.stock === null || location.stock > 0);
+}
+
+function bravoLocations(tiendas: BravoTienda[]): ScrapeLocationAvailability[] {
+  return tiendas
+    .filter((tienda) => typeof tienda.disponibleArticuloTienda === "boolean")
+    .map((tienda) => ({
+      externalId: String(tienda.idTiendaArticuloTienda),
+      available: tienda.disponibleArticuloTienda === true,
+      stock:
+        typeof tienda.stockArticuloTienda === "number" &&
+        Number.isFinite(tienda.stockArticuloTienda)
+          ? tienda.stockArticuloTienda
+          : null,
+      currentPrice:
+        tienda.pvpArticuloTienda > 0 ? String(tienda.pvpArticuloTienda) : null,
+      regularPrice: bravoRegularPrice(tienda),
+    }));
 }
 
 const BRAVO_API = "https://bravova-api.superbravo.com.do";

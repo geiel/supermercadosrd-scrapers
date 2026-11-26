@@ -101,3 +101,20 @@ export async function fetchMagentoGraphqlItemsBySku<T extends { sku: string }>(
     totalCount,
   };
 }
+
+// `stock_status` of the online store view the prices come from. In practice
+// these stores leave most out-of-stock products out of GraphQL altogether, so
+// OUT_OF_STOCK is rare; an unknown value means no signal.
+export const magentoStockStatusSchema = z
+  .string()
+  .nullable()
+  .optional()
+  .catch(null);
+
+export function magentoOutOfStockOnline(
+  stockStatus: string | null | undefined
+): boolean | null {
+  if (stockStatus === "OUT_OF_STOCK") return true;
+  if (stockStatus === "IN_STOCK") return false;
+  return null;
+}

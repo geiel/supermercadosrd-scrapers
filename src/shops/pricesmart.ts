@@ -5,7 +5,7 @@ import {
   PREFERRED_DO_PRICESMART_LOCATION_IDS,
   PRICESMART_DO_DEFAULT_LOCATION_ID,
 } from "../pricesmart-locations.js";
-import { error, notFound, ok } from "../result.js";
+import { error, notFound, ok, withStock } from "../result.js";
 import {
   formatAmount,
   formatUnit,
@@ -15,6 +15,7 @@ import {
 } from "../unit-utils.js";
 import type {
   FetchWithRetryConfig,
+  ScrapeLocationAvailability,
   ScrapePriceInput,
   ScrapePriceResult,
 } from "../types.js";
@@ -86,7 +87,7 @@ type PricesmartLocationAttribute = z.infer<
   typeof pricesmartLocationAttributeSchema
 >[number];
 
-type PricesmartLocationCandidate = {
+export type PricesmartLocationCandidate = {
   country: string;
   club?: string;
   currentPrice: string;
@@ -555,13 +556,51 @@ export async function scrapePricesmartPrice(
     return error(shopId, "source_unit_mismatch", false, true);
   }
 
-  return ok(
-    shopId,
-    currentPrice.currentPrice,
-    currentPrice.regularPrice ?? null,
-    currentPrice.club ?? null,
-    undefined,
-    unitUpdate,
-    null
+  const locations = pricesmartClubLocations(locationCandidates);
+
+  return withStock(
+    ok(
+      shopId,
+      currentPrice.currentPrice,
+      currentPrice.regularPrice ?? null,
+      currentPrice.club ?? null,
+      undefined,
+      unitUpdate,
+      null
+    ),
+    {
+      locations,
+      // Out of stock online only when no club in the country has it.
+      outOfStockOnline:
+        locations.length === 0 ? null : !locations.some((club) => club.available),
+    }
   );
+}
+
+/** Each Dominican club with a known availability; "68" is the country, not a club. */
+export function pricesmartClubLocations(
+  candidates: PricesmartLocationCandidate[]
+): ScrapeLocationAvailability[] {
+  const clubs = new Map<string, ScrapeLocationAvailability>();
+  for (const candidate of candidates) {
+    if (
+      candidate.country !== "DO" ||
+      !candidate.club ||
+      candidate.club === PRICESMART_DO_DEFAULT_LOCATION_ID ||
+      candidate.available === null ||
+      clubs.has(candidate.club)
+    ) {
+      continue;
+    }
+
+    clubs.set(candidate.club, {
+      externalId: candidate.club,
+      available: candidate.available,
+      stock: null,
+      currentPrice: candidate.currentPrice,
+      regularPrice: candidate.regularPrice ?? null,
+    });
+  }
+
+  return [...clubs.values()];
 }

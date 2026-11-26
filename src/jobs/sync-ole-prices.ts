@@ -254,8 +254,9 @@ async function main() {
   }
 
   // Products that left the listing are looked up one by one, so a visible
-  // price is hidden only when Olé says the product is gone or cannot be
-  // ordered. Rows already hidden stay hidden without a request.
+  // price is hidden only when Olé says the product is gone (one that cannot
+  // be ordered keeps its price, marked out of stock online). Rows already
+  // hidden stay hidden without a request.
   let lookups = 0;
   for (const row of missing) {
     if (catalogComplete && row.hidden) {

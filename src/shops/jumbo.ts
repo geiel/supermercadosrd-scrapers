@@ -8,7 +8,7 @@ import {
   buildJumboProductUrlFromNameAndSku,
   extractJumboSkuCandidates,
 } from "../recovery/shared.js";
-import { error, notFound, ok } from "../result.js";
+import { error, notFound, ok, withStock } from "../result.js";
 import type {
   FetchWithRetryConfig,
   ScrapePriceInput,
@@ -25,12 +25,17 @@ import {
   magentoPurchaseTermsGraphqlFields,
   magentoPurchaseTermsGraphqlSchema,
 } from "./magento-graphql-purchase-terms.js";
-import { fetchMagentoGraphqlItemsBySku } from "./magento-graphql-batch.js";
+import {
+  fetchMagentoGraphqlItemsBySku,
+  magentoOutOfStockOnline,
+  magentoStockStatusSchema,
+} from "./magento-graphql-batch.js";
 
 const shopId = 3;
 
 const jumboProductItemFields = `
       sku
+      stock_status
       name
       url_key
 ${jumboImageGraphqlFields}
@@ -66,6 +71,7 @@ const jumboProductItemSchema = z
     sku: z.string(),
     name: z.string().nullable().optional(),
     url_key: z.string().nullable().optional(),
+    stock_status: magentoStockStatusSchema,
     image: z
       .object({
         url: z.string().nullable().optional(),
@@ -237,14 +243,17 @@ export function toJumboPriceResult(
     productUnit: input,
   });
 
-  return ok(
-    shopId,
-    finalPrice,
-    regularPrice,
-    null,
-    buildScrapeableJumboProductUrl(product),
-    undefined,
-    purchaseTerms
+  return withStock(
+    ok(
+      shopId,
+      finalPrice,
+      regularPrice,
+      null,
+      buildScrapeableJumboProductUrl(product),
+      undefined,
+      purchaseTerms
+    ),
+    { outOfStockOnline: magentoOutOfStockOnline(product.stock_status) }
   );
 }
 

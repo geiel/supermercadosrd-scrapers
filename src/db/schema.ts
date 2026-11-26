@@ -1,5 +1,6 @@
 import {
   boolean,
+  doublePrecision,
   index,
   integer,
   jsonb,
@@ -87,11 +88,48 @@ export const productsShopsPrices = pgTable(
     }),
     updateAt: timestamp("updateAt", { withTimezone: true }),
     hidden: boolean("hidden"),
+    // true = out of stock online, false = in stock, null = the store gives no signal.
+    outOfStockOnline: boolean("outOfStockOnline"),
   },
   (table) => [
     primaryKey({
       columns: [table.productId, table.shopId],
       name: "products_shops_prices_productId_shopId_pk",
+    }),
+  ]
+);
+
+// A chain's branch; externalId is the store's own code (the offers' locationId).
+export const shopLocations = pgTable("shop_locations", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  shopId: integer("shopId").notNull(),
+  externalId: text("externalId").notNull(),
+  name: text("name").notNull(),
+  city: text("city"),
+  address: text("address"),
+  latitude: doublePrecision("latitude"),
+  longitude: doublePrecision("longitude"),
+  active: boolean("active").notNull().default(true),
+  updatedAt: timestamp("updatedAt", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// A product at one branch, as the store says it.
+export const productsShopsLocations = pgTable(
+  "products_shops_locations",
+  {
+    productId: integer("productId").notNull(),
+    shopId: integer("shopId").notNull(),
+    locationId: integer("locationId").notNull(),
+    available: boolean("available").notNull(),
+    stock: numeric("stock"),
+    currentPrice: numeric("currentPrice"),
+    regularPrice: numeric("regularPrice"),
+    observedAt: timestamp("observedAt", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.productId, table.locationId],
+      name: "products_shops_locations_pkey",
     }),
   ]
 );

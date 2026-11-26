@@ -13,6 +13,7 @@ import type { ScrapePriceResult, ScrapePriceSuccess } from "../types.js";
 import type { PurchaseTerms } from "../purchase-terms.js";
 import { revalidateProduct } from "./revalidate-product.js";
 import { relinkBravoOffer } from "./bravo-relink-offer.js";
+import { applyStockSignals } from "./offer-stock.js";
 
 export type ShopPriceRow = Pick<
   ProductShopPriceRow,
@@ -223,6 +224,10 @@ export async function applyScrapeResult(
     updatedProductMeasurement = true;
   }
 
+  // «Agotado online» and the branch rows; the price writes below decide
+  // whether the page is refreshed anyway.
+  const stockChanged = await applyStockSignals(row, result);
+
   const canonicalUrl = result.canonicalUrl?.trim() || null;
   const termsChanged = purchaseTermsChanged(row, result.purchaseTerms);
   const termsPatch =
@@ -242,10 +247,12 @@ export async function applyScrapeResult(
 
   if (priceAndLocationUnchanged && !urlChanged && !termsChanged) {
     await touchProductPrice(row, result.purchaseTerms);
-    if (updatedProductMeasurement || row.hidden) {
+    if (updatedProductMeasurement || row.hidden || stockChanged) {
       await revalidateProduct(row.productId);
     }
-    console.log(`[IGNORE] ${result.shopName} ${logPrefix(row)}`);
+    console.log(
+      `[IGNORE] ${result.shopName} ${logPrefix(row)}${stockChanged ? " stock=updated" : ""}`
+    );
     return;
   }
 
@@ -332,7 +339,7 @@ export async function applyScrapeResult(
   });
 
   if (updated.length === 0) {
-    if (updatedProductMeasurement) {
+    if (updatedProductMeasurement || stockChanged) {
       await revalidateProduct(row.productId);
     }
     console.log(`[DONE/IGNORE] ${result.shopName} ${logPrefix(row)}`);

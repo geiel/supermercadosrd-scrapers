@@ -10,6 +10,8 @@ import {
 import {
   fetchMagentoGraphqlItemsBySku,
   type MagentoGraphqlBatchLookup,
+  magentoOutOfStockOnline,
+  magentoStockStatusSchema,
 } from "./magento-graphql-batch.js";
 
 const MERCA_JUMBO_API_URL_ENV = "MERCA_JUMBO_API_URL";
@@ -17,6 +19,7 @@ const MERCA_JUMBO_STORE_CODE_ENV = "MERCA_JUMBO_STORE_CODE";
 
 const mercaJumboProductItemFields = `
       sku
+      stock_status
       name
       url_key
 ${magentoPurchaseTermsGraphqlFields}
@@ -69,6 +72,7 @@ const mercaJumboProductItemSchema = z
       })
       .nullable()
       .optional(),
+    stock_status: magentoStockStatusSchema,
     price_range: z
       .object({
         minimum_price: z.object({
@@ -96,6 +100,7 @@ const mercaJumboProductResponseSchema = z.object({
 });
 
 export type MercaJumboProduct = {
+  outOfStockOnline: boolean | null;
   sku: string;
   name: string | null;
   urlKey: string | null;
@@ -285,6 +290,7 @@ function toMercaJumboProduct(product: MercaJumboProductItem): MercaJumboProduct 
       product.price_range?.minimum_price.regular_price.value ?? null
     ),
     purchaseTermsFields: product,
+    outOfStockOnline: magentoOutOfStockOnline(product.stock_status),
   };
 }
 
