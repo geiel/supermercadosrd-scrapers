@@ -35,6 +35,8 @@ export type MagentoGraphqlBatchLookup<T> =
       data: Record<string, unknown>;
       /** The response also carried GraphQL errors: what it left out proves nothing. */
       hasErrors: boolean;
+      /** `items` came as an actual list (not missing or null). */
+      itemsListed: boolean;
     }
   | { ok: false; reason: string };
 
@@ -109,6 +111,7 @@ export async function fetchMagentoGraphqlItemsBySku<T extends { sku: string }>(
     totalCount,
     data: parsed.data.data,
     hasErrors: (parsed.data.errors?.length ?? 0) > 0,
+    itemsListed: Array.isArray(parsed.data.data.products.items),
   };
 }
 

@@ -247,7 +247,15 @@ async function main() {
     // once Olé sells it again.
     const details = fetched.details as OleProductDetails | null;
     if (details?.add_to_cart?.disable_buy_button) {
-      results.set(row, toOleListingPriceResult(product));
+      // The details just confirmed it: out of stock even if the listing still sold it.
+      const listing = product as { product_price?: Record<string, unknown> };
+      results.set(
+        row,
+        toOleListingPriceResult({
+          ...listing,
+          product_price: { ...listing.product_price, disable_buy_button: true },
+        })
+      );
       continue;
     }
     const terms = details ? extractOlePurchaseTerms(details) : undefined;

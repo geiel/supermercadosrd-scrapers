@@ -219,12 +219,21 @@ type ChunkOutcome =
     }
   | { ok: false; reason: string };
 
-function magentoListing(lookup: { items: Map<string, unknown>; totalCount: number | null; hasErrors: boolean }) {
+function magentoListing(lookup: {
+  items: Map<string, unknown>;
+  totalCount: number | null;
+  hasErrors: boolean;
+  itemsListed: boolean;
+}) {
   return {
     listed: new Set(lookup.items.keys()),
-    // Only an explicit count, matched by the items and with no errors, makes
-    // an absence mean something.
-    complete: !lookup.hasErrors && lookup.totalCount !== null && lookup.totalCount <= lookup.items.size,
+    // Only an explicit list and count, matched by the items and with no
+    // errors, makes an absence mean something.
+    complete:
+      lookup.itemsListed &&
+      !lookup.hasErrors &&
+      lookup.totalCount !== null &&
+      lookup.totalCount <= lookup.items.size,
   };
 }
 

@@ -83,12 +83,13 @@ const sourceItemsSchema = z.object({
     z.object({
       sku: z.string(),
       quantity: z.number().nullish(),
-      status: z.number(),
+      // 1 in stock, 0 out; anything else is not understood and voids the batch's branches.
+      status: z.union([z.literal(0), z.literal(1)]),
     })
   ),
 });
 
-type SourceItem = { code: string; sku: string; quantity: number | null; status: number };
+type SourceItem = { code: string; sku: string; quantity: number | null; status: 0 | 1 };
 
 /** The branch rows of these fields, or null when any field is missing (then no branch is known). */
 function readSourceItems(data: Record<string, unknown>, codes: string[]): SourceItem[] | null {
@@ -476,22 +477,20 @@ export async function fetchMercaJumboProductsBySkus(
   return {
     ...lookup,
     items: new Map(
-      [...lookup.items].map(([sku, item]) => [
-        sku,
-        item === null
-          ? null
-          : {
-              ...toMercaJumboProduct(item),
-              ...(sourceItems ? { locations: mercaJumboLocations(sourceItems, sku) } : {}),
-            },
-      ])
+      [...lookup.items].map(([sku, item]) => {
+        if (item === null) return [sku, null];
+        const locations = sourceItems ? mercaJumboLocations(sourceItems, sku) : undefined;
+        return [sku, { ...toMercaJumboProduct(item), ...(locations ? { locations } : {}) }];
+      })
     ),
   };
 }
 
-function mercaJumboLocations(sourceItems: SourceItem[], sku: string): ScrapeLocationAvailability[] {
-  return sourceItems
-    .filter((item) => item.sku === sku)
+/** Its branch rows; undefined when no branch lists it at all (nothing proven: the stored ones stay). */
+function mercaJumboLocations(sourceItems: SourceItem[], sku: string): ScrapeLocationAvailability[] | undefined {
+  const rows = sourceItems.filter((item) => item.sku === sku);
+  if (rows.length === 0) return undefined;
+  return rows
     .map((item) => ({
       externalId: item.code,
       available: item.status === 1,
