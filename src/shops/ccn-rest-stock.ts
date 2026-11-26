@@ -83,9 +83,10 @@ export async function fetchCcnRestProductsBySkus(
   const parsed = restResponseSchema.safeParse(await response.json().catch(() => null));
   if (!parsed.success) return { ok: false, reason: "invalid_payload" };
 
-  const rawItems = parsed.data.items ?? [];
-  // Counted more than it listed: an incomplete answer is no proof of anything.
-  if (typeof parsed.data.total_count !== "number" || parsed.data.total_count > rawItems.length) {
+  // Only an explicit list whose distinct SKUs are exactly what it counts can
+  // prove an absence: a missing list, a shorter one or repeated items cannot.
+  const rawItems = parsed.data.items;
+  if (!Array.isArray(rawItems) || typeof parsed.data.total_count !== "number") {
     return { ok: false, reason: "incomplete_listing" };
   }
 
@@ -97,6 +98,11 @@ export async function fetchCcnRestProductsBySkus(
     })
   ) {
     return { ok: false, reason: "unidentified_items" };
+  }
+
+  const distinctSkus = new Set(rawItems.map((raw) => (raw as { sku: string }).sku));
+  if (distinctSkus.size !== rawItems.length || parsed.data.total_count !== rawItems.length) {
+    return { ok: false, reason: "incomplete_listing" };
   }
 
   const items = new Map<string, CcnRestItem | null>();

@@ -154,9 +154,10 @@ export async function applyStockSignals(
 
     // With branches, out of stock online is decided by the active ones only:
     // a closed branch's stock is no use to anyone (the page leaves it out too).
+    // A store listing only closed branches has it nowhere one can buy.
     const active = ids ? [...byCode.values()].filter((location) => ids.get(location.externalId)?.active) : [];
     const outOfStockOnline =
-      active.length > 0 ? !active.some(locationInStock) : result.outOfStockOnline;
+      ids && byCode.size > 0 ? !active.some(locationInStock) : result.outOfStockOnline;
 
     // The flag and its branch rows change together or not at all, and only
     // while the offer still points at the item this result read: an admin

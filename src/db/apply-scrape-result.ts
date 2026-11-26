@@ -111,9 +111,11 @@ async function hideProductPrice(row: ShopPriceRow) {
       and(
         eq(productsShopsPrices.productId, row.productId),
         eq(productsShopsPrices.shopId, row.shopId),
-        // Hide only the offer that failed: if another run moved it to a new
-        // api meanwhile (a Bravo relink), that run's result stands.
-        sql`${productsShopsPrices.api} IS NOT DISTINCT FROM ${row.api ?? null}`
+        // Hide only the offer that failed: if another run or an admin moved
+        // it to a new api or url meanwhile (a Bravo relink, a fixed link),
+        // that change stands.
+        sql`${productsShopsPrices.api} IS NOT DISTINCT FROM ${row.api ?? null}`,
+        eq(productsShopsPrices.url, row.url)
       )
     );
 

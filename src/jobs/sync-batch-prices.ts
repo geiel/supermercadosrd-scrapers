@@ -651,6 +651,11 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
             (batchLookupKeys(row)?.keys ?? []).some((key) => outcome.listed!.has(key));
           if (isCcnStockShop(shopId) && outcome.complete !== false && !listedButUnread) {
             leftOut.push(row);
+          } else if (isCcnStockShop(shopId) && outcome.complete === false && !listedButUnread) {
+            // A listing with errors or cut short proves nothing about what it
+            // left out (and the single lookup would ask the same broken store
+            // view): keep the stored price; a later complete run decides.
+            record(row, error(shopId, "partial_listing", true, false), "batch");
           } else if (row.hidden) {
             stillHidden.push(row);
           } else {

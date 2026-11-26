@@ -242,9 +242,15 @@ async function main() {
     }
 
     // The listing price stays authoritative; the details only add the terms.
-    const terms = fetched.details
-      ? extractOlePurchaseTerms(fetched.details as OleProductDetails)
-      : undefined;
+    // A product that cannot be ordered lists no quantities: its terms would
+    // be made up. It keeps its price, out of stock online, and gets its terms
+    // once Olé sells it again.
+    const details = fetched.details as OleProductDetails | null;
+    if (details?.add_to_cart?.disable_buy_button) {
+      results.set(row, toOleListingPriceResult(product));
+      continue;
+    }
+    const terms = details ? extractOlePurchaseTerms(details) : undefined;
     results.set(
       row,
       terms
