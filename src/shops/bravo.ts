@@ -29,8 +29,9 @@ const productSchema = z
         z.object({
           idTiendaArticuloTienda: z.number(),
           pvpArticuloTienda: z.number(),
-          disponibleArticuloTienda: z.boolean().nullish(),
-          stockArticuloTienda: z.number().nullish(),
+          // Read loosely: an odd stock field must never cost the price.
+          disponibleArticuloTienda: z.unknown().optional(),
+          stockArticuloTienda: z.unknown().optional(),
           associatedOferta: z.array(
             z.object({
               precioReferenciaArticuloTiendaOferta: z.number(),
@@ -138,7 +139,15 @@ export const bravoLocationInStock = locationInStock;
 
 /** Every branch with its availability, or none when any branch leaves it out (a partial answer replaces nothing). */
 function bravoLocations(tiendas: BravoTienda[]): ScrapeLocationAvailability[] {
-  if (tiendas.some((tienda) => typeof tienda.disponibleArticuloTienda !== "boolean")) {
+  if (
+    tiendas.some(
+      (tienda) =>
+        typeof tienda.disponibleArticuloTienda !== "boolean" ||
+        (tienda.stockArticuloTienda !== undefined &&
+          tienda.stockArticuloTienda !== null &&
+          !(typeof tienda.stockArticuloTienda === "number" && Number.isFinite(tienda.stockArticuloTienda)))
+    )
+  ) {
     return [];
   }
   return tiendas

@@ -121,10 +121,11 @@ export const magentoStockStatusSchema = z
   .optional()
   .catch(null);
 
+/** undefined when the status is missing or unknown: the stored value stays. */
 export function magentoOutOfStockOnline(
   stockStatus: string | null | undefined
-): boolean | null {
+): boolean | undefined {
   if (stockStatus === "OUT_OF_STOCK") return true;
   if (stockStatus === "IN_STOCK") return false;
-  return null;
+  return undefined;
 }

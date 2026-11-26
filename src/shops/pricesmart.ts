@@ -573,6 +573,13 @@ export async function scrapePricesmartPrice(
     // club without a known availability means a partial answer: nothing is
     // known then, and the stored clubs stay.
     locations.length === 0 ||
+      availabilityEntries.some(
+        (entry) =>
+          entry.country === "DO" &&
+          entry.club &&
+          entry.club !== PRICESMART_DO_DEFAULT_LOCATION_ID &&
+          !locations.some((club) => club.externalId === entry.club)
+      ) ||
       locationCandidates.some(
         (candidate) =>
           candidate.club &&

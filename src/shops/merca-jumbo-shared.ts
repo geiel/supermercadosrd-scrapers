@@ -114,7 +114,7 @@ async function mercaJumboSourceCodes(
   const known = sourceCodesByStore.get(storeCode);
   if (known) return known;
 
-  const { response } = await fetchWithRetryDetailed(
+  const { response, failureReason } = await fetchWithRetryDetailed(
     apiUrl,
     {
       method: "POST",
@@ -123,12 +123,17 @@ async function mercaJumboSourceCodes(
     },
     requestConfig
   );
-  // The store pushing back stops the batch queue, as any request does.
-  if (response && BACKOFF_STATUSES.has(`http_${response.status}`)) {
-    return { failed: `http_${response.status}` };
+  // The store pushing back stops the batch queue, as any request does (after
+  // its retries the client gives no response, only the reason).
+  const status = response ? `http_${response.status}` : failureReason;
+  if (BACKOFF_STATUSES.has(status)) {
+    return { failed: status };
   }
   const parsed = z
-    .object({ data: z.object({ InventorySources: z.array(z.object({ source_code: z.string() })) }) })
+    .object({
+      errors: z.undefined().or(z.null()).or(z.array(z.unknown()).length(0)),
+      data: z.object({ InventorySources: z.array(z.object({ source_code: z.string() })) }),
+    })
     .safeParse(response?.ok ? await response.json().catch(() => null) : null);
   if (!parsed.success) {
     // Not asked again this run: prices alone, one request per batch.
@@ -169,8 +174,12 @@ async function fetchRemainingSourceItems(
   // The store pushing back must stop the batch queue like any request does.
   if (!response) return { failed: failureReason };
   if (!response.ok) return { failed: `http_${response.status}` };
-  const parsed = z.object({ data: z.record(z.unknown()) }).safeParse(await response.json().catch(() => null));
-  return parsed.success ? readSourceItems(parsed.data.data, codes) : null;
+  const parsed = z
+    .object({ data: z.record(z.unknown()), errors: z.array(z.unknown()).nullish() })
+    .safeParse(await response.json().catch(() => null));
+  // Any GraphQL error leaves a field half read: no branches this batch.
+  if (!parsed.success || (parsed.data.errors?.length ?? 0) > 0) return null;
+  return readSourceItems(parsed.data.data, codes);
 }
 
 const mercaJumboProductItemSchema = z
@@ -218,7 +227,7 @@ const mercaJumboProductResponseSchema = z.object({
 });
 
 export type MercaJumboProduct = {
-  outOfStockOnline: boolean | null;
+  outOfStockOnline: boolean | undefined;
   /** Each branch that carries it (batch only); undefined when the branches could not be read. */
   locations?: ScrapeLocationAvailability[];
   sku: string;
@@ -452,7 +461,8 @@ export async function fetchMercaJumboProductsBySkus(
 
   // Prices stand on their own: if a branch field fails, this batch just
   // carries no branches and the stored ones stay.
-  let sourceItems = sourceCodes.length > 0 ? readSourceItems(lookup.data, firstCodes) : null;
+  let sourceItems =
+    sourceCodes.length > 0 && !lookup.hasErrors ? readSourceItems(lookup.data, firstCodes) : null;
   if (sourceItems && restCodes.length > 0) {
     const rest = await fetchRemainingSourceItems(apiUrl, storeCode, input.skus, restCodes, requestConfig);
     if (rest && "failed" in rest) {

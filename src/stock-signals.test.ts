@@ -162,14 +162,14 @@ test("Sirena VTEX: IsAvailable false keeps the price, out of stock online", () =
   assert.equal(inStock.status === "ok" && inStock.outOfStockOnline, false);
 
   const unknown = toSirenaVtexPriceResult(product(undefined) as never, {});
-  assert.equal(unknown.status === "ok" && unknown.outOfStockOnline, null);
+  assert.equal(unknown.status === "ok" && "outOfStockOnline" in unknown, false);
 });
 
 test("Magento stores read stock_status, and anything else is no signal", () => {
   assert.equal(magentoOutOfStockOnline("OUT_OF_STOCK"), true);
   assert.equal(magentoOutOfStockOnline("IN_STOCK"), false);
-  assert.equal(magentoOutOfStockOnline(null), null);
-  assert.equal(magentoOutOfStockOnline("SOMETHING_NEW"), null);
+  assert.equal(magentoOutOfStockOnline(null), undefined);
+  assert.equal(magentoOutOfStockOnline("SOMETHING_NEW"), undefined);
 
   const result = toNacionalGraphqlPriceResult({
     sku: "2010123",

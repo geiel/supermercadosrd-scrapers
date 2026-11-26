@@ -90,7 +90,12 @@ export async function fetchCcnRestProductsBySkus(
   }
 
   // An item without its SKU could be any of the asked ones: nothing proven.
-  if (rawItems.some((raw) => typeof (raw as { sku?: unknown } | null)?.sku !== "string")) {
+  if (
+    rawItems.some((raw) => {
+      const sku = (raw as { sku?: unknown } | null)?.sku;
+      return typeof sku !== "string" || sku.trim() === "";
+    })
+  ) {
     return { ok: false, reason: "unidentified_items" };
   }
 

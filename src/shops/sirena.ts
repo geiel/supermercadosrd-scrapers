@@ -64,10 +64,8 @@ export function toSirenaVtexPriceResult(
       undefined,
       extractSirenaVtexPurchaseTerms(normalizedProduct, input)
     ),
-    {
-      outOfStockOnline:
-        normalizedProduct.isAvailable === null ? null : !normalizedProduct.isAvailable,
-    }
+    // Without IsAvailable nothing is known: the stored value stays.
+    normalizedProduct.isAvailable === null ? {} : { outOfStockOnline: !normalizedProduct.isAvailable }
   );
 }
 

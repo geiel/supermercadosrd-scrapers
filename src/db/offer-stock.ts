@@ -141,7 +141,7 @@ async function syncOfferLocations(
  * price that was just saved stands.
  */
 export async function applyStockSignals(
-  offer: OfferKey,
+  offer: OfferKey & { url: string; api: string | null },
   result: Pick<ScrapePriceSuccess, "outOfStockOnline" | "locations" | "shopName">
 ): Promise<boolean> {
   if (result.outOfStockOnline === undefined && result.locations === undefined) {
@@ -158,8 +158,18 @@ export async function applyStockSignals(
     const outOfStockOnline =
       active.length > 0 ? !active.some(locationInStock) : result.outOfStockOnline;
 
-    // The flag and its branch rows change together or not at all.
+    // The flag and its branch rows change together or not at all, and only
+    // while the offer still points at the item this result read: an admin
+    // may have moved it to another one meanwhile.
     return await db.transaction(async (tx) => {
+      const current = await tx.execute(
+        sql`select 1 from products_shops_prices
+            where "productId" = ${offer.productId} and "shopId" = ${offer.shopId}
+              and url = ${offer.url} and api is not distinct from ${offer.api}
+            for update`
+      );
+      if (current.length === 0) return false;
+
       let changed = false;
       if (outOfStockOnline !== undefined) {
         const updated = await tx
