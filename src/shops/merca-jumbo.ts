@@ -1,4 +1,4 @@
-import { error, notFound, ok, withStock } from "../result.js";
+import { error, notFound, ok, locationInStock, withStock } from "../result.js";
 import type {
   FetchWithRetryConfig,
   ScrapePriceInput,
@@ -71,6 +71,13 @@ export function toMercaJumboPriceResult(
       undefined,
       purchaseTerms
     ),
-    { outOfStockOnline: product.outOfStockOnline }
+    {
+      // With branches, out of stock online only when none has it.
+      outOfStockOnline:
+        product.locations && product.locations.length > 0
+          ? !product.locations.some(locationInStock)
+          : product.outOfStockOnline,
+      locations: product.locations,
+    }
   );
 }

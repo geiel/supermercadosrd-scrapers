@@ -537,10 +537,14 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
     }
     writeResults(writesWithoutRequests);
 
-    const maxKeys = Math.min(
-      options.batchSize,
-      shopId === 1 ? SIRENA_VTEX_MAX_SEARCH_RESULTS : options.batchSize
-    );
+    // Merca Jumbo prices twice as many per request: each batch takes a second
+    // request for the branches past the first 11 (merca-jumbo-shared.ts).
+    const maxKeys =
+      shopId === 1
+        ? Math.min(options.batchSize, SIRENA_VTEX_MAX_SEARCH_RESULTS)
+        : shopId === 7
+          ? options.batchSize * 2
+          : options.batchSize;
 
     // A request that fails for any reason but backoff is split in two and
     // each half is asked again, down to single rows. A product that breaks

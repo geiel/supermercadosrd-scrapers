@@ -200,3 +200,39 @@ test("CCN: a product GraphQL left out is out of stock online while its website s
   assert.equal(otherWebsite.status === "not_found" && otherWebsite.hide, true);
   assert.equal(toCcnLeftOutResult(7, item(1, [1, 51, 59])).status, "ok");
 });
+
+const { toMercaJumboPriceResult } = await import("./shops/merca-jumbo.js");
+
+test("Merca Jumbo: branches decide out of stock online when they are known", () => {
+  const product = (locations?: Array<{ externalId: string; available: boolean; stock: number | null }>) => ({
+    outOfStockOnline: false,
+    sku: "2006566",
+    name: "Tomates",
+    urlKey: null,
+    imageUrls: [],
+    finalPrice: "95",
+    regularPrice: "95",
+    purchaseTermsFields: { sku: "2006566" },
+    ...(locations
+      ? { locations: locations.map((location) => ({ ...location, currentPrice: null, regularPrice: null })) }
+      : {}),
+  });
+
+  const some = toMercaJumboPriceResult(product([
+    { externalId: "902", available: true, stock: 12 },
+    { externalId: "904", available: true, stock: 0 },
+  ]) as never, {});
+  assert.equal(some.status === "ok" && some.outOfStockOnline, false);
+  assert.equal(some.status === "ok" && some.locations?.length, 2);
+
+  const none = toMercaJumboPriceResult(product([
+    { externalId: "902", available: false, stock: 5 },
+    { externalId: "904", available: true, stock: 0 },
+  ]) as never, {});
+  assert.equal(none.status === "ok" && none.outOfStockOnline, true);
+
+  // Branches unread: stock_status decides and the stored branch rows stay.
+  const unread = toMercaJumboPriceResult(product() as never, {});
+  assert.equal(unread.status === "ok" && unread.outOfStockOnline, false);
+  assert.equal(unread.status === "ok" && "locations" in unread, false);
+});

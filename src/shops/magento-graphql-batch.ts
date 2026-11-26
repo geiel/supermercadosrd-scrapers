@@ -7,12 +7,15 @@ import type { FetchWithRetryConfig } from "../types.js";
 // one request instead of one request per product.
 
 const batchResponseSchema = z.object({
-  data: z.object({
-    products: z.object({
-      total_count: z.number().nullable().optional(),
-      items: z.array(z.unknown()).nullable().optional(),
-    }),
-  }),
+  data: z
+    .object({
+      products: z.object({
+        total_count: z.number().nullable().optional(),
+        items: z.array(z.unknown()).nullable().optional(),
+      }),
+    })
+    // Other fields the query asks for alongside (Merca Jumbo's SourceItems).
+    .passthrough(),
 });
 
 // Magento counted matching products but listed none of them. Nacional's
@@ -27,6 +30,8 @@ export type MagentoGraphqlBatchLookup<T> =
       // gets the same invalid_payload error the single lookup returns.
       items: Map<string, T | null>;
       totalCount: number | null;
+      /** The whole `data` object, for fields asked beside `products`. */
+      data: Record<string, unknown>;
     }
   | { ok: false; reason: string };
 
@@ -99,6 +104,7 @@ export async function fetchMagentoGraphqlItemsBySku<T extends { sku: string }>(
     ok: true,
     items,
     totalCount,
+    data: parsed.data.data,
   };
 }
 

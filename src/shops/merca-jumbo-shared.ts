@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { dedupeComparableUrls, normalizeNacionalImageUrl } from "../image-utils.js";
 import { fetchWithRetryDetailed } from "../http-client.js";
-import type { FetchWithRetryConfig } from "../types.js";
+import type { FetchWithRetryConfig, ScrapeLocationAvailability } from "../types.js";
+import { randomDelay } from "../utils.js";
 import {
   magentoPurchaseTermsGraphqlFields,
   magentoPurchaseTermsGraphqlSchema,
@@ -47,13 +48,122 @@ const mercaJumboProductQuery = `query MercaJumboProductBySku($sku: String!) {
   }
 }`;
 
-const mercaJumboProductsBySkuQuery = `query MercaJumboProductsBySku($skus: [String!]!, $pageSize: Int!) {
+// Each branch's stock comes from SourceItems, one branch per field. Magento
+// takes at most 10 aliases a query, so a request holds one unaliased field and
+// 10 aliased: 11 branches beside the prices, and the rest (2 of 13 on
+// 2026-11-26) in a second request. The batch sync asks 100 products at a time
+// for Merca Jumbo, so this costs the same requests as prices alone at 50.
+const SOURCES_PER_REQUEST = 11;
+
+function sourceItemsFields(codes: string[]) {
+  return codes
+    .map(
+      (code, index) =>
+        `${index === 0 ? "" : `s${code}: `}SourceItems(source_code: "${code}", skus: $skus, pageSize: $pageSize) { items { sku quantity status } }`
+    )
+    .join("\n  ");
+}
+
+function mercaJumboProductsBySkuQuery(sourceCodes: string[]) {
+  return `query MercaJumboProductsBySku($skus: [String!]!, $pageSize: Int!) {
   products(filter: { sku: { in: $skus } }, pageSize: $pageSize) {
     total_count
     items {${mercaJumboProductItemFields}
     }
   }
+  ${sourceItemsFields(sourceCodes)}
 }`;
+}
+
+const sourceItemsSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        sku: z.string(),
+        quantity: z.number().nullish(),
+        status: z.number().nullish(),
+      })
+    )
+    .nullish(),
+});
+
+type SourceItem = { code: string; sku: string; quantity: number | null; status: number | null };
+
+/** The branch rows of these fields, or null when any field is missing (then no branch is known). */
+function readSourceItems(data: Record<string, unknown>, codes: string[]): SourceItem[] | null {
+  const rows: SourceItem[] = [];
+  for (const [index, code] of codes.entries()) {
+    const parsed = sourceItemsSchema.safeParse(data[index === 0 ? "SourceItems" : `s${code}`]);
+    if (!parsed.success) return null;
+    for (const item of parsed.data.items ?? []) {
+      rows.push({ code, sku: item.sku, quantity: item.quantity ?? null, status: item.status ?? null });
+    }
+  }
+  return rows;
+}
+
+const sourceCodesByStore = new Map<string, string[]>();
+
+/** Merca Jumbo's branches (InventorySources), once per run; none when they can't be read. */
+async function mercaJumboSourceCodes(
+  apiUrl: string,
+  storeCode: string,
+  requestConfig?: FetchWithRetryConfig
+): Promise<string[]> {
+  const known = sourceCodesByStore.get(storeCode);
+  if (known) return known;
+
+  const { response } = await fetchWithRetryDetailed(
+    apiUrl,
+    {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json", store: storeCode },
+      body: JSON.stringify({ query: "{ InventorySources { source_code } }" }),
+    },
+    requestConfig
+  );
+  const parsed = z
+    .object({ data: z.object({ InventorySources: z.array(z.object({ source_code: z.string() })) }) })
+    .safeParse(response?.ok ? await response.json().catch(() => null) : null);
+  if (!parsed.success) {
+    console.error("[MERCA] branches could not be read: prices only this time");
+    return [];
+  }
+
+  // Codes go into the query text: only plain ones.
+  const codes = parsed.data.data.InventorySources.map((source) => source.source_code).filter((code) =>
+    /^[A-Za-z0-9_-]+$/.test(code)
+  );
+  sourceCodesByStore.set(storeCode, codes);
+  return codes;
+}
+
+/** The branches past the first request's, in one more request; null if it fails. */
+async function fetchRemainingSourceItems(
+  apiUrl: string,
+  storeCode: string,
+  skus: string[],
+  codes: string[],
+  requestConfig?: FetchWithRetryConfig
+): Promise<SourceItem[] | null> {
+  await randomDelay(1000, 1500);
+  const { response } = await fetchWithRetryDetailed(
+    apiUrl,
+    {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json", store: storeCode },
+      body: JSON.stringify({
+        query: `query MercaJumboSourceItems($skus: [String!]!, $pageSize: Int!) {\n  ${sourceItemsFields(codes)}\n}`,
+        variables: { skus, pageSize: skus.length },
+      }),
+    },
+    requestConfig
+  );
+  const parsed = z
+    .object({ data: z.record(z.unknown()) })
+    .safeParse(response?.ok ? await response.json().catch(() => null) : null);
+  return parsed.success ? readSourceItems(parsed.data.data, codes) : null;
+}
 
 const mercaJumboProductItemSchema = z
   .object({
@@ -101,6 +211,8 @@ const mercaJumboProductResponseSchema = z.object({
 
 export type MercaJumboProduct = {
   outOfStockOnline: boolean | null;
+  /** Each branch that carries it (batch only); undefined when the branches could not be read. */
+  locations?: ScrapeLocationAvailability[];
   sku: string;
   name: string | null;
   urlKey: string | null;
@@ -311,11 +423,14 @@ export async function fetchMercaJumboProductsBySkus(
     return { ok: false, reason: "missing_store_code" };
   }
 
+  const sourceCodes = await mercaJumboSourceCodes(apiUrl, storeCode, requestConfig);
+  const firstCodes = sourceCodes.slice(0, SOURCES_PER_REQUEST);
+  const restCodes = sourceCodes.slice(SOURCES_PER_REQUEST);
   const lookup = await fetchMagentoGraphqlItemsBySku(
     {
       url: apiUrl,
       storeCode,
-      query: mercaJumboProductsBySkuQuery,
+      query: mercaJumboProductsBySkuQuery(firstCodes),
       skus: input.skus,
       itemSchema: mercaJumboProductItemSchema,
     },
@@ -325,13 +440,38 @@ export async function fetchMercaJumboProductsBySkus(
     return lookup;
   }
 
+  // Prices stand on their own: if a branch field fails, this batch just
+  // carries no branches and the stored ones stay.
+  let sourceItems = sourceCodes.length > 0 ? readSourceItems(lookup.data, firstCodes) : null;
+  if (sourceItems && restCodes.length > 0) {
+    const rest = await fetchRemainingSourceItems(apiUrl, storeCode, input.skus, restCodes, requestConfig);
+    sourceItems = rest ? [...sourceItems, ...rest] : null;
+  }
+
   return {
     ...lookup,
     items: new Map(
       [...lookup.items].map(([sku, item]) => [
         sku,
-        item === null ? null : toMercaJumboProduct(item),
+        item === null
+          ? null
+          : {
+              ...toMercaJumboProduct(item),
+              ...(sourceItems ? { locations: mercaJumboLocations(sourceItems, sku) } : {}),
+            },
       ])
     ),
   };
+}
+
+function mercaJumboLocations(sourceItems: SourceItem[], sku: string): ScrapeLocationAvailability[] {
+  return sourceItems
+    .filter((item) => item.sku === sku)
+    .map((item) => ({
+      externalId: item.code,
+      available: item.status === 1,
+      stock: item.quantity,
+      currentPrice: null,
+      regularPrice: null,
+    }));
 }

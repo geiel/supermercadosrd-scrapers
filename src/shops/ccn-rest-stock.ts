@@ -121,6 +121,7 @@ export function toCcnLeftOutResult(
     onSale
       ? ok(shopId, specialPrice.toString(), regularPrice.toString())
       : ok(shopId, regularPrice.toString(), null),
-    { outOfStockOnline: true }
+    // Merca Jumbo lists its branches: none has it, so the old rows go.
+    { outOfStockOnline: true, ...(shopId === 7 ? { locations: [] } : {}) }
   );
 }

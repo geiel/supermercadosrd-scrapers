@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { fetchWithRetry, getBravoHeaders } from "../http-client.js";
-import { error, notFound, ok, withStock } from "../result.js";
+import { error, locationInStock, notFound, ok, withStock } from "../result.js";
 import type {
   FetchWithRetryConfig,
   ScrapeLocationAvailability,
@@ -135,9 +135,7 @@ function bravoRegularPrice(tienda: BravoTienda) {
 }
 
 /** In stock at a branch: Bravo says it is available and has units left. */
-export function bravoLocationInStock(location: ScrapeLocationAvailability) {
-  return location.available && (location.stock === null || location.stock > 0);
-}
+export const bravoLocationInStock = locationInStock;
 
 function bravoLocations(tiendas: BravoTienda[]): ScrapeLocationAvailability[] {
   return tiendas

@@ -1,4 +1,5 @@
 import type {
+  ScrapeLocationAvailability,
   ScrapePriceError,
   ScrapePriceNotFound,
   ScrapePriceSuccess,
@@ -86,4 +87,9 @@ export function withStock<T extends ScrapePriceSuccess | ScrapePriceNotFound | S
     outOfStockOnline: stock.outOfStockOnline,
     ...(stock.locations !== undefined ? { locations: stock.locations } : {}),
   } as T;
+}
+
+/** In stock at a branch: the store says available and, when it gives a count, units are left. */
+export function locationInStock(location: ScrapeLocationAvailability) {
+  return location.available && (location.stock === null || location.stock > 0);
 }
