@@ -165,3 +165,38 @@ test("Magento stores read stock_status, and anything else is no signal", () => {
   assert.equal(result.status === "ok" && result.currentPrice, "99");
   assert.equal(result.status === "ok" && result.outOfStockOnline, true);
 });
+
+const { toCcnLeftOutResult } = await import("./shops/ccn-rest-stock.js");
+
+test("CCN: a product GraphQL left out is out of stock online while its website still sells it", () => {
+  const item = (status: number, websites: number[], extra: Array<{ attribute_code: string; value: unknown }> = []) => ({
+    sku: "2165645",
+    status,
+    price: 499.95,
+    extension_attributes: { website_ids: websites },
+    custom_attributes: extra,
+  });
+
+  const out = toCcnLeftOutResult(2, item(1, [1, 51]));
+  assert.equal(out.status === "ok" && out.currentPrice, "499.95");
+  assert.equal(out.status === "ok" && out.outOfStockOnline, true);
+
+  const onSale = toCcnLeftOutResult(
+    2,
+    item(1, [1], [
+      { attribute_code: "special_price", value: "449.950000" },
+      { attribute_code: "special_from_date", value: "2026-11-13 00:00:00" },
+      { attribute_code: "special_to_date", value: "2026-11-27 00:00:00" },
+    ]),
+    new Date("2026-11-26T12:00:00Z")
+  );
+  assert.equal(onSale.status === "ok" && onSale.currentPrice, "449.95");
+  assert.equal(onSale.status === "ok" && onSale.regularPrice, "499.95");
+
+  // Disabled, or no longer on that store's website: gone, hidden.
+  const disabled = toCcnLeftOutResult(3, item(2, [51]));
+  assert.equal(disabled.status === "not_found" && disabled.hide, true);
+  const otherWebsite = toCcnLeftOutResult(7, item(1, [1]));
+  assert.equal(otherWebsite.status === "not_found" && otherWebsite.hide, true);
+  assert.equal(toCcnLeftOutResult(7, item(1, [1, 51, 59])).status, "ok");
+});

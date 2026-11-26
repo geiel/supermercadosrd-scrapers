@@ -149,7 +149,7 @@ export function resolveMercaJumboApiUrl(api: string | null | undefined) {
     normalizeEnvValue(process.env[MERCA_JUMBO_API_URL_ENV]);
 }
 
-function resolveMercaJumboStoreCode() {
+export function resolveMercaJumboStoreCode() {
   return normalizeEnvValue(process.env[MERCA_JUMBO_STORE_CODE_ENV]);
 }
 

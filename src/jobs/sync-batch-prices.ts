@@ -17,7 +17,7 @@ import { applyScrapeResult, type ShopPriceRow } from "../db/apply-scrape-result.
 import type { PurchaseTerms } from "../purchase-terms.js";
 import { closeDb, db } from "../db/client.js";
 import { products, productsShopsPrices } from "../db/schema.js";
-import { error, SHOP_NAMES } from "../result.js";
+import { error, notFound, SHOP_NAMES } from "../result.js";
 import { scrapePrice } from "../scrape-price.js";
 import { fetchJumboProductsBySkus, toJumboPriceResult } from "../shops/jumbo.js";
 import { fetchMercaJumboProductsBySkus } from "../shops/merca-jumbo-shared.js";
@@ -27,6 +27,11 @@ import {
   fetchNacionalGraphqlPricesBySkus,
   toNacionalGraphqlPriceResult,
 } from "../shops/nacional.js";
+import {
+  fetchCcnRestProductsBySkus,
+  isCcnStockShop,
+  toCcnLeftOutResult,
+} from "../shops/ccn-rest-stock.js";
 import { toSirenaVtexPriceResult } from "../shops/sirena.js";
 import {
   fetchSirenaVtexProductsByFilter,
@@ -38,9 +43,12 @@ import { mapWithConcurrency, randomDelay } from "../utils.js";
 
 // Refreshes every Sirena (VTEX), Nacional, Jumbo and Merca Jumbo price with
 // batched lookups: one request prices up to 50 products (~1,000 requests for
-// ~50k rows, where the per-product batch spent one request per row). Products
-// a batch leaves out are looked up one by one with the single scrapers, so a
-// visible price is only hidden on the same evidence as before. Hidden rows are
+// ~50k rows, where the per-product batch spent one request per row). Nacional,
+// Jumbo and Merca Jumbo leave products with no stock out of GraphQL: one REST
+// request per 50 of those rows marks them out of stock online or hides the ones
+// the store dropped. Other products a batch leaves out are looked up one by one
+// with the single scrapers, so a visible price is only hidden on the same
+// evidence as before. Hidden rows are
 // rechecked once a day. It runs on its own schedule; the per-product batch and
 // the deals job skip these rows.
 
@@ -336,6 +344,8 @@ type ShopReport = {
   batchRequests: number;
   batchFound: number;
   lookups: number;
+  // REST requests that sorted rows GraphQL left out into out of stock or gone.
+  stockRequests: number;
   hiddenUnchanged: number;
   // Batches the store counted products for but listed none of.
   emptyBatches: number;
@@ -431,6 +441,7 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
       batchRequests: 0,
       batchFound: 0,
       lookups: 0,
+      stockRequests: 0,
       hiddenUnchanged: 0,
       emptyBatches: 0,
       priceChanges: 0,
@@ -443,6 +454,9 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
     console.log(`[INFO] ${shopName} rows=${rows.length}`);
 
     const stillHidden: ShopPriceRow[] = [];
+    // Nacional, Jumbo and Merca Jumbo: rows a good GraphQL response left out,
+    // visible and hidden. Their REST check tells out of stock from gone.
+    const leftOut: ShopPriceRow[] = [];
 
     // Counts a row's outcome and writes its report line.
     const record = (row: ShopPriceRow, result: ScrapePriceResult, source: string) => {
@@ -603,9 +617,12 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
       for (const row of chunk.rows) {
         const result = outcome.results.get(row);
         if (!result) {
-          // Left out of a good response: visible rows get the single
-          // lookup; hidden ones stay hidden until they show up again.
-          if (row.hidden) {
+          // Left out of a good response: Nacional, Jumbo and Merca Jumbo
+          // rows get the REST stock check; otherwise visible rows get the
+          // single lookup and hidden ones stay hidden until they show up again.
+          if (isCcnStockShop(shopId)) {
+            leftOut.push(row);
+          } else if (row.hidden) {
             stillHidden.push(row);
           } else {
             missing.push(row);
@@ -620,6 +637,57 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
         }
       }
       writeResults(writes);
+    }
+
+    // These stores leave a product with no stock out of GraphQL. One REST
+    // request per batch says, for each left-out row, whether the store still
+    // sells it (out of stock online, priced as its page shows) or dropped it
+    // (hidden). If REST fails, rows fall back to what they got before.
+    if (isCcnStockShop(shopId)) {
+      const stockChunks = chunkBatchRows(
+        leftOut.flatMap((row) => {
+          const lookup = batchLookupKeys(row);
+          return lookup ? [{ row, lookup }] : [];
+        }),
+        options.batchSize
+      );
+      for (const chunk of stockChunks) {
+        const fallBack = () => {
+          for (const row of chunk.rows) {
+            if (row.hidden) stillHidden.push(row);
+            else missing.push(row);
+          }
+        };
+        if (stoppedReason) {
+          fallBack();
+          continue;
+        }
+
+        await paceRequest();
+        report.stockRequests += 1;
+        const lookup = await fetchCcnRestProductsBySkus(shopId, chunk.keys, options.requestConfig);
+        recordRequest(lookup.ok ? null : lookup.reason);
+        if (!lookup.ok) {
+          console.error(
+            `[ERROR] ${shopName} stock check of ${chunk.rows.length} rows failed reason=${lookup.reason}`
+          );
+          fallBack();
+          continue;
+        }
+
+        const matches = matchSkuItems(chunk.rows, lookup.items);
+        const writes = [];
+        for (const row of chunk.rows) {
+          const item = matches.get(row);
+          const write = settle(
+            row,
+            item ? toCcnLeftOutResult(shopId, item) : notFound(shopId, "product_not_found", true),
+            "stock"
+          );
+          if (write) writes.push(write);
+        }
+        writeResults(writes);
+      }
     }
 
     // Single lookups, capped so a broken batch cannot turn into thousands of
@@ -745,7 +813,7 @@ async function main() {
         .sort((a, b) => b[1] - a[1])
         .map(([outcome, count]) => `${outcome} ${count}`)
         .join(", ");
-      return `- ${SHOP_NAMES[report.shopId]} (${report.minutes.toFixed(1)} min): ${report.rows} rows, ${report.batchRequests} batch requests (${report.batchFound} found${report.emptyBatches ? `, ${report.emptyBatches} listed nothing` : ""}), ${report.lookups} single lookups, ${report.hiddenUnchanged} still hidden, ${report.priceChanges} price changes; ${outcomes}`;
+      return `- ${SHOP_NAMES[report.shopId]} (${report.minutes.toFixed(1)} min): ${report.rows} rows, ${report.batchRequests} batch requests (${report.batchFound} found${report.emptyBatches ? `, ${report.emptyBatches} listed nothing` : ""}), ${report.lookups} single lookups, ${report.stockRequests} stock checks, ${report.hiddenUnchanged} still hidden, ${report.priceChanges} price changes; ${outcomes}`;
     }),
     `- Stopped early: ${stopped.length ? stopped.join(", ") : "no"}`,
     `- Failures: ${failures.length}${failures.length ? ` (${[...new Set(failures)].slice(0, 10).join(", ")})` : ""}`,

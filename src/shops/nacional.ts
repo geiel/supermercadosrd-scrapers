@@ -161,7 +161,7 @@ function buildNacionalProductLookupUrl(sku: string): string {
   return `${NACIONAL_REST_API_URL}?${params.toString()}`;
 }
 
-function parsePrice(value: unknown): number | null {
+export function parsePrice(value: unknown): number | null {
   const price =
     typeof value === "number"
       ? value
@@ -202,7 +202,7 @@ function isNacionalWebsiteProduct(
   return websiteIds.some((websiteId) => Number(websiteId) === NACIONAL_WEBSITE_ID);
 }
 
-function isSpecialPriceActive(
+export function isSpecialPriceActive(
   specialFromDate: unknown,
   specialToDate: unknown,
   now = new Date()
@@ -303,13 +303,14 @@ export async function scrapeNacionalPrice(
     return notFound(shopId, "product_not_found", true);
   }
 
-  // REST (used for SKUs GraphQL leaves out) says nothing about stock.
-  return withStock(toNacionalPriceResult({
+  // Alone, REST says nothing about stock: the batch sync decides it from
+  // GraphQL leaving the product out (ccn-rest-stock.ts), so the stored value stays.
+  return toNacionalPriceResult({
     price: product.price,
     specialPrice: getAttributeValue(product, "special_price"),
     specialFromDate: getAttributeValue(product, "special_from_date"),
     specialToDate: getAttributeValue(product, "special_to_date"),
-  }), { outOfStockOnline: null });
+  });
 }
 
 const NACIONAL_GRAPHQL_URL = "https://supermercadosnacional.com/graphql";
