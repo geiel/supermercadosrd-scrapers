@@ -13,7 +13,10 @@ import {
   type BatchChunk,
   type BatchPriceShopId,
 } from "../batch-price-sync.js";
-import { applyScrapeResult, type ShopPriceRow } from "../db/apply-scrape-result.js";
+import {
+  applyScrapeResultsBatch,
+  type ShopPriceRow,
+} from "../db/apply-scrape-result.js";
 import type { PurchaseTerms } from "../purchase-terms.js";
 import { closeDb, db } from "../db/client.js";
 import { products, productsShopsPrices } from "../db/schema.js";
@@ -39,7 +42,7 @@ import {
   type SirenaVtexFilterField,
 } from "../sirena-vtex.js";
 import type { FetchWithRetryConfig, ScrapePriceResult } from "../types.js";
-import { mapWithConcurrency, randomDelay } from "../utils.js";
+import { randomDelay } from "../utils.js";
 
 // Refreshes every Sirena (VTEX), Nacional, Jumbo and Merca Jumbo price with
 // batched lookups: one request prices up to 50 products (~1,000 requests for
@@ -141,6 +144,7 @@ async function loadShopRows(
       purchaseTermsSource: productsShopsPrices.purchaseTermsSource,
       updateAt: productsShopsPrices.updateAt,
       hidden: productsShopsPrices.hidden,
+      outOfStockOnline: productsShopsPrices.outOfStockOnline,
       presentation: sql<string>`product_measurement_label(${products.id})`,
     })
     .from(productsShopsPrices)
@@ -532,9 +536,7 @@ async function syncHostGroup(shopIds: BatchPriceShopId[], options: RunOptions) {
       }
 
       queueWrite(() =>
-        mapWithConcurrency(writes, options.concurrency, ([row, result]) =>
-          applyScrapeResult(row, result)
-        )
+        applyScrapeResultsBatch(writes, { concurrency: options.concurrency })
       );
     };
 

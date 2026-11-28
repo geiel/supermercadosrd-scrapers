@@ -2,7 +2,10 @@
 
 import { appendFileSync } from "node:fs";
 import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
-import { applyScrapeResult, type ShopPriceRow } from "../db/apply-scrape-result.js";
+import {
+  applyScrapeResultsBatch,
+  type ShopPriceRow,
+} from "../db/apply-scrape-result.js";
 import { closeDb, db } from "../db/client.js";
 import { products, productsShopsPrices } from "../db/schema.js";
 import { error, notFound } from "../result.js";
@@ -19,7 +22,7 @@ import {
   toSupermixPriceResult,
 } from "../shops/supermix.js";
 import type { ScrapePriceResult } from "../types.js";
-import { mapWithConcurrency, randomDelay } from "../utils.js";
+import { randomDelay } from "../utils.js";
 
 // Refreshes every Supermix price (visible and hidden) by paging through the
 // public catalog API (~210 requests), then looks up only the products missing
@@ -102,6 +105,7 @@ async function loadSupermixRows(productId: number | null, limit: number | null) 
       purchaseTermsSource: productsShopsPrices.purchaseTermsSource,
       updateAt: productsShopsPrices.updateAt,
       hidden: productsShopsPrices.hidden,
+      outOfStockOnline: productsShopsPrices.outOfStockOnline,
     })
     .from(productsShopsPrices)
     .innerJoin(products, eq(productsShopsPrices.productId, products.id))
@@ -428,9 +432,7 @@ async function main() {
     const changes = [...results.entries()].filter(
       ([row, result]) => !(row.hidden && result.status !== "ok" && result.hide)
     );
-    await mapWithConcurrency(changes, concurrency, ([row, result]) =>
-      applyScrapeResult(row, result)
-    );
+    await applyScrapeResultsBatch(changes, { concurrency });
   }
 
   const errorCount = [...results.values()].filter((result) => result.status === "error").length;

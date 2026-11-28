@@ -119,6 +119,7 @@ async function main() {
       purchaseTermsSource: productsShopsPrices.purchaseTermsSource,
       updateAt: productsShopsPrices.updateAt,
       hidden: productsShopsPrices.hidden,
+      outOfStockOnline: productsShopsPrices.outOfStockOnline,
       presentation: sql<string>`product_measurement_label(${products.id})`,
 
     })
