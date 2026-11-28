@@ -1,54 +1,76 @@
-import { and, eq, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "./client.js";
 import {
   productsShopsLocations,
   productsShopsPrices,
   shopLocations,
 } from "./schema.js";
+import {
+  buildOfferLocationValues,
+  diffOfferLocations,
+  resolveEffectiveOutOfStockOnline,
+  type BranchRef,
+  type OfferKey,
+  type OfferLocationValue,
+  type StockBatchOutcome,
+} from "./scrape-write-plan.js";
 import type { ScrapeLocationAvailability, ScrapePriceSuccess } from "../types.js";
-import { locationInStock } from "../result.js";
 
-type OfferKey = { productId: number; shopId: number };
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-type BranchRef = { id: number; active: boolean };
+type StockSignalResult = Pick<
+  ScrapePriceSuccess,
+  "outOfStockOnline" | "locations" | "shopName"
+>;
+
+export type StockSignalOffer = OfferKey & { url: string; api: string | null };
+
+const STOCK_BATCH_SIZE = 100;
+const LOCATION_UPSERT_CHUNK_SIZE = 1500;
+const LOCATION_DELETE_CHUNK_SIZE = 500;
 
 // shopId -> the store's branch code -> its shop_locations row, loaded once per run.
 const locationIdsByShop = new Map<number, Map<string, BranchRef>>();
 
 async function loadLocationIds(shopId: number) {
   const rows = await db
-    .select({ id: shopLocations.id, externalId: shopLocations.externalId, active: shopLocations.active })
+    .select({
+      id: shopLocations.id,
+      externalId: shopLocations.externalId,
+      active: shopLocations.active,
+    })
     .from(shopLocations)
     .where(eq(shopLocations.shopId, shopId));
-  const ids = new Map(rows.map((row) => [row.externalId, { id: row.id, active: row.active }]));
+  const ids = new Map(
+    rows.map((row) => [row.externalId, { id: row.id, active: row.active }])
+  );
   locationIdsByShop.set(shopId, ids);
   return ids;
 }
 
 /** Branch ids for these codes; a branch the store just opened is added under its code. */
-async function resolveLocationIds(shopId: number, externalIds: string[]): Promise<Map<string, BranchRef>> {
+async function resolveLocationIds(
+  shopId: number,
+  externalIds: string[]
+): Promise<Map<string, BranchRef>> {
   let ids = locationIdsByShop.get(shopId) ?? (await loadLocationIds(shopId));
-  const missing = externalIds.filter((externalId) => !ids.has(externalId));
+  const missing = [...new Set(externalIds)].filter(
+    (externalId) => !ids.has(externalId)
+  );
   if (missing.length === 0) {
     return ids;
   }
 
   await db
     .insert(shopLocations)
-    .values(missing.map((externalId) => ({ shopId, externalId, name: externalId })))
+    .values(
+      missing.map((externalId) => ({ shopId, externalId, name: externalId }))
+    )
     .onConflictDoNothing();
   console.warn(
     `[LOCATIONS] shopId=${shopId} new branch codes ${missing.join(",")}: added with the code as name`
   );
   ids = await loadLocationIds(shopId);
   return ids;
-}
-
-function sameNumber(left: string | number | null, right: string | number | null) {
-  if (left === null || right === null) {
-    return left === right;
-  }
-  return Number(left) === Number(right);
 }
 
 /**
@@ -63,23 +85,7 @@ async function syncOfferLocations(
   ids: Map<string, BranchRef>
 ): Promise<boolean> {
   const observedAt = new Date();
-  const values = [...byCode.values()].flatMap((location) => {
-    const locationId = ids.get(location.externalId)?.id;
-    return locationId === undefined
-      ? []
-      : [
-          {
-            productId: offer.productId,
-            shopId: offer.shopId,
-            locationId,
-            available: location.available,
-            stock: location.stock === null ? null : String(location.stock),
-            currentPrice: location.currentPrice,
-            regularPrice: location.regularPrice,
-            observedAt,
-          },
-        ];
-  });
+  const values = buildOfferLocationValues(offer, byCode, ids, observedAt);
 
   const existing = await tx
     .select()
@@ -90,27 +96,18 @@ async function syncOfferLocations(
         eq(productsShopsLocations.shopId, offer.shopId)
       )
     );
-  const before = new Map(existing.map((row) => [row.locationId, row]));
-  const keep = values.map((value) => value.locationId);
-  const changed =
-    existing.some((row) => !keep.includes(row.locationId)) ||
-    values.some((value) => {
-      const row = before.get(value.locationId);
-      return (
-        !row ||
-        row.available !== value.available ||
-        !sameNumber(row.stock, value.stock) ||
-        !sameNumber(row.currentPrice, value.currentPrice) ||
-        !sameNumber(row.regularPrice, value.regularPrice)
-      );
-    });
+
+  const { changed, staleLocationIds } = diffOfferLocations(existing, values);
 
   if (values.length > 0) {
     await tx
       .insert(productsShopsLocations)
       .values(values)
       .onConflictDoUpdate({
-        target: [productsShopsLocations.productId, productsShopsLocations.locationId],
+        target: [
+          productsShopsLocations.productId,
+          productsShopsLocations.locationId,
+        ],
         set: {
           available: sql`excluded."available"`,
           stock: sql`excluded."stock"`,
@@ -121,15 +118,17 @@ async function syncOfferLocations(
       });
   }
 
-  await tx
-    .delete(productsShopsLocations)
-    .where(
-      and(
-        eq(productsShopsLocations.productId, offer.productId),
-        eq(productsShopsLocations.shopId, offer.shopId),
-        ...(keep.length > 0 ? [notInArray(productsShopsLocations.locationId, keep)] : [])
-      )
-    );
+  if (staleLocationIds.length > 0) {
+    await tx
+      .delete(productsShopsLocations)
+      .where(
+        and(
+          eq(productsShopsLocations.productId, offer.productId),
+          eq(productsShopsLocations.shopId, offer.shopId),
+          inArray(productsShopsLocations.locationId, staleLocationIds)
+        )
+      );
+  }
 
   return changed;
 }
@@ -141,23 +140,27 @@ async function syncOfferLocations(
  * price that was just saved stands.
  */
 export async function applyStockSignals(
-  offer: OfferKey & { url: string; api: string | null },
-  result: Pick<ScrapePriceSuccess, "outOfStockOnline" | "locations" | "shopName">
+  offer: StockSignalOffer,
+  result: StockSignalResult
 ): Promise<boolean> {
   if (result.outOfStockOnline === undefined && result.locations === undefined) {
     return false;
   }
 
   try {
-    const byCode = new Map((result.locations ?? []).map((location) => [location.externalId, location]));
-    const ids = result.locations === undefined ? null : await resolveLocationIds(offer.shopId, [...byCode.keys()]);
+    const byCode = new Map(
+      (result.locations ?? []).map((location) => [location.externalId, location])
+    );
+    const ids =
+      result.locations === undefined
+        ? null
+        : await resolveLocationIds(offer.shopId, [...byCode.keys()]);
 
-    // With branches, out of stock online is decided by the active ones only:
-    // a closed branch's stock is no use to anyone (the page leaves it out too).
-    // A store listing only closed branches has it nowhere one can buy.
-    const active = ids ? [...byCode.values()].filter((location) => ids.get(location.externalId)?.active) : [];
-    const outOfStockOnline =
-      ids && byCode.size > 0 ? !active.some(locationInStock) : result.outOfStockOnline;
+    const outOfStockOnline = resolveEffectiveOutOfStockOnline(
+      byCode,
+      ids,
+      result.outOfStockOnline
+    );
 
     // The flag and its branch rows change together or not at all, and only
     // while the offer still points at the item this result read: an admin
@@ -199,6 +202,233 @@ export async function applyStockSignals(
     );
     return false;
   }
+}
+
+/**
+ * Applies branch stock signals and «agotado online» for a batch of unique
+ * offers from the same shop in one transaction per chunk. Each chunk commits
+ * or fails independently so a transient failure on one chunk never discards
+ * changedProductIds (revalidation) for chunks that already committed.
+ */
+export async function applyStockSignalsBatch(
+  shopId: number,
+  items: ReadonlyArray<{ offer: StockSignalOffer; result: StockSignalResult }>
+): Promise<StockBatchOutcome> {
+  const changedProductIds = new Set<number>();
+  const failedProductIds = new Set<number>();
+
+  if (items.length === 0) {
+    return { changedProductIds, failedProductIds };
+  }
+
+  let ids: Map<string, BranchRef>;
+  try {
+    const allExternalIds: string[] = [];
+    for (const { result } of items) {
+      for (const location of result.locations ?? []) {
+        allExternalIds.push(location.externalId);
+      }
+    }
+    ids = await resolveLocationIds(shopId, allExternalIds);
+  } catch (error) {
+    console.error(
+      `[STOCK] batch shopId=${shopId} count=${items.length} resolveLocationIds failed`,
+      error
+    );
+    for (const { offer } of items) {
+      failedProductIds.add(offer.productId);
+    }
+    return { changedProductIds, failedProductIds };
+  }
+
+  for (let offset = 0; offset < items.length; offset += STOCK_BATCH_SIZE) {
+    const chunk = items.slice(offset, offset + STOCK_BATCH_SIZE);
+    const observedAt = new Date();
+    const prepared = chunk.map(({ offer, result }) => {
+      const byCode = new Map(
+        (result.locations ?? []).map((location) => [
+          location.externalId,
+          location,
+        ])
+      );
+      return {
+        offer,
+        outOfStockOnline: resolveEffectiveOutOfStockOnline(
+          byCode,
+          ids,
+          result.outOfStockOnline
+        ),
+        values: buildOfferLocationValues(offer, byCode, ids, observedAt),
+      };
+    });
+
+    const productIds = prepared.map((item) => item.offer.productId);
+
+    try {
+      const chunkChangedIds = await db.transaction(async (tx) => {
+        const chunkChanged: number[] = [];
+
+        const lockedRows = await tx
+          .select({
+            productId: productsShopsPrices.productId,
+            url: productsShopsPrices.url,
+            api: productsShopsPrices.api,
+            outOfStockOnline: productsShopsPrices.outOfStockOnline,
+          })
+          .from(productsShopsPrices)
+          .where(
+            and(
+              eq(productsShopsPrices.shopId, shopId),
+              inArray(productsShopsPrices.productId, productIds)
+            )
+          )
+          .orderBy(asc(productsShopsPrices.productId))
+          .for("update");
+
+        const lockedByProductId = new Map(
+          lockedRows.map((row) => [row.productId, row])
+        );
+
+        const valid = prepared.filter((item) => {
+          const locked = lockedByProductId.get(item.offer.productId);
+          return (
+            locked !== undefined &&
+            locked.url === item.offer.url &&
+            (locked.api ?? null) === (item.offer.api ?? null)
+          );
+        });
+        if (valid.length === 0) {
+          return chunkChanged;
+        }
+
+        const validProductIds = valid.map((item) => item.offer.productId);
+        const existingRows = await tx
+          .select()
+          .from(productsShopsLocations)
+          .where(
+            and(
+              eq(productsShopsLocations.shopId, shopId),
+              inArray(productsShopsLocations.productId, validProductIds)
+            )
+          );
+
+        const existingByProductId = new Map<number, typeof existingRows>();
+        for (const row of existingRows) {
+          const list = existingByProductId.get(row.productId);
+          if (list) {
+            list.push(row);
+          } else {
+            existingByProductId.set(row.productId, [row]);
+          }
+        }
+
+        const oosBuckets = new Map<boolean | null, number[]>([
+          [true, []],
+          [false, []],
+          [null, []],
+        ]);
+        const allUpserts: OfferLocationValue[] = [];
+        const stalePairs: Array<{ productId: number; locationId: number }> = [];
+
+        for (const item of valid) {
+          const locked = lockedByProductId.get(item.offer.productId)!;
+          let itemChanged = false;
+
+          if (
+            item.outOfStockOnline !== undefined &&
+            locked.outOfStockOnline !== item.outOfStockOnline
+          ) {
+            oosBuckets.get(item.outOfStockOnline)!.push(item.offer.productId);
+            itemChanged = true;
+          }
+
+          const existing = existingByProductId.get(item.offer.productId) ?? [];
+          const { changed, staleLocationIds } = diffOfferLocations(
+            existing,
+            item.values
+          );
+          if (changed) {
+            itemChanged = true;
+          }
+          if (itemChanged) {
+            chunkChanged.push(item.offer.productId);
+          }
+
+          allUpserts.push(...item.values);
+          for (const locationId of staleLocationIds) {
+            stalePairs.push({ productId: item.offer.productId, locationId });
+          }
+        }
+
+        for (const [value, idsToUpdate] of oosBuckets) {
+          if (idsToUpdate.length === 0) {
+            continue;
+          }
+          await tx
+            .update(productsShopsPrices)
+            .set({ outOfStockOnline: value })
+            .where(
+              and(
+                eq(productsShopsPrices.shopId, shopId),
+                inArray(productsShopsPrices.productId, idsToUpdate),
+                sql`${productsShopsPrices.outOfStockOnline} IS DISTINCT FROM ${value}::boolean`
+              )
+            );
+        }
+
+        for (let i = 0; i < allUpserts.length; i += LOCATION_UPSERT_CHUNK_SIZE) {
+          await tx
+            .insert(productsShopsLocations)
+            .values(allUpserts.slice(i, i + LOCATION_UPSERT_CHUNK_SIZE))
+            .onConflictDoUpdate({
+              target: [
+                productsShopsLocations.productId,
+                productsShopsLocations.locationId,
+              ],
+              set: {
+                available: sql`excluded."available"`,
+                stock: sql`excluded."stock"`,
+                currentPrice: sql`excluded."currentPrice"`,
+                regularPrice: sql`excluded."regularPrice"`,
+                observedAt: sql`excluded."observedAt"`,
+              },
+            });
+        }
+
+        for (let i = 0; i < stalePairs.length; i += LOCATION_DELETE_CHUNK_SIZE) {
+          const slice = stalePairs.slice(i, i + LOCATION_DELETE_CHUNK_SIZE);
+          const tuples = sql.join(
+            slice.map((pair) => sql`(${pair.productId}, ${pair.locationId})`),
+            sql`, `
+          );
+          await tx
+            .delete(productsShopsLocations)
+            .where(
+              and(
+                eq(productsShopsLocations.shopId, shopId),
+                sql`(${productsShopsLocations.productId}, ${productsShopsLocations.locationId}) IN (${tuples})`
+              )
+            );
+        }
+
+        return chunkChanged;
+      });
+
+      for (const productId of chunkChangedIds) {
+        changedProductIds.add(productId);
+      }
+    } catch (error) {
+      console.error(
+        `[STOCK] batch shopId=${shopId} chunkSize=${chunk.length} failed`,
+        error
+      );
+      for (const { offer } of chunk) {
+        failedProductIds.add(offer.productId);
+      }
+    }
+  }
+
+  return { changedProductIds, failedProductIds };
 }
 
 /** For tests and one-off scripts that switch databases. */
