@@ -117,6 +117,7 @@ async function main() {
       priceReferenceQuantity:
         productsShopsPrices.priceReferenceQuantity,
       purchaseTermsSource: productsShopsPrices.purchaseTermsSource,
+      purchaseTermsEvidence: productsShopsPrices.purchaseTermsEvidence,
       updateAt: productsShopsPrices.updateAt,
       hidden: productsShopsPrices.hidden,
       outOfStockOnline: productsShopsPrices.outOfStockOnline,

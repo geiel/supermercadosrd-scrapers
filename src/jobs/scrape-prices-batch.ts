@@ -182,6 +182,7 @@ async function main() {
             maximumPurchaseQuantity: productsShopsPrices.maximumPurchaseQuantity,
             priceReferenceQuantity: productsShopsPrices.priceReferenceQuantity,
             purchaseTermsSource: productsShopsPrices.purchaseTermsSource,
+            purchaseTermsEvidence: productsShopsPrices.purchaseTermsEvidence,
             updateAt: productsShopsPrices.updateAt,
             hidden: productsShopsPrices.hidden,
             outOfStockOnline: productsShopsPrices.outOfStockOnline,

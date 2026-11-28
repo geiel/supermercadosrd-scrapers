@@ -5,6 +5,7 @@ import type {
   ScrapePriceResult,
   ScrapePriceSuccess,
 } from "../types.js";
+import { mapWithConcurrency } from "../utils.js";
 import { productPriceStatesEqual } from "./product-price-history.js";
 import type { ProductShopPriceRow } from "./schema.js";
 
@@ -27,12 +28,21 @@ export type ShopPriceRow = Pick<
   | "updateAt"
   | "hidden"
 > & {
+  purchaseTermsEvidence?: ProductShopPriceRow["purchaseTermsEvidence"];
   outOfStockOnline?: boolean | null;
   presentation?: string | null;
 };
 
 export type OfferKey = { productId: number; shopId: number };
 export type BranchRef = { id: number; active: boolean };
+export type ScrapeWriteEntry = readonly [ShopPriceRow, ScrapePriceResult];
+
+export type ApplyScrapeResultOptions = {
+  /** Stock signals were already applied in a batch transaction. */
+  skipStockSignals?: boolean;
+  /** Whether the preceding batch stock sync changed anything visible. */
+  stockChanged?: boolean;
+};
 
 export type OfferLocationValue = {
   productId: number;
@@ -61,6 +71,31 @@ export function sameNumber(
     return left === right;
   }
   return Number(left) === Number(right);
+}
+
+function sameNullableNumber(
+  left: string | number | null | undefined,
+  right: string | number | null | undefined
+) {
+  return sameNumber(left ?? null, right ?? null);
+}
+
+/**
+ * Deterministic JSON serialization that sorts object keys recursively so values
+ * read back from PostgreSQL jsonb (which reorders keys) compare equal to
+ * freshly constructed JS objects.
+ */
+export function stableJsonStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => (item === undefined ? "null" : stableJsonStringify(item))).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJsonStringify(v)}`).join(",")}}`;
 }
 
 /**
@@ -189,6 +224,50 @@ export function purchaseTermsChanged(
   );
 }
 
+/**
+ * Stricter check used only for batch-touch eligibility: a row can skip writing
+ * full purchaseTermsPatch (and only refresh purchaseTermsObservedAt) only when
+ * nullable numeric fields match exactly (no 0 vs null normalization needed)
+ * and purchaseTermsEvidence was loaded and matches structurally.
+ */
+export function purchaseTermsExactForBatchTouch(
+  row: ShopPriceRow,
+  purchaseTerms: PurchaseTerms | null | undefined
+) {
+  if (purchaseTerms === undefined) {
+    return true;
+  }
+
+  if (row.purchaseTermsEvidence === undefined) {
+    return false;
+  }
+
+  const expected = purchaseTermsPatch(purchaseTerms);
+  return (
+    (row.purchaseMode ?? null) === expected.purchaseMode &&
+    (row.purchaseUnit ?? null) === expected.purchaseUnit &&
+    sameNullableNumber(
+      row.minimumPurchaseQuantity,
+      expected.minimumPurchaseQuantity
+    ) &&
+    sameNullableNumber(
+      row.purchaseQuantityIncrement,
+      expected.purchaseQuantityIncrement
+    ) &&
+    sameNullableNumber(
+      row.maximumPurchaseQuantity,
+      expected.maximumPurchaseQuantity
+    ) &&
+    sameNullableNumber(
+      row.priceReferenceQuantity,
+      expected.priceReferenceQuantity
+    ) &&
+    (row.purchaseTermsSource ?? null) === expected.purchaseTermsSource &&
+    stableJsonStringify(row.purchaseTermsEvidence) ===
+      stableJsonStringify(expected.purchaseTermsEvidence)
+  );
+}
+
 export function normalizeUrlForComparison(url: string) {
   return url.trim().replace(/\/+$/, "");
 }
@@ -240,17 +319,22 @@ export function classifyScrapeWrite(
   }
 
   const unchangedPriceRow = isPriceRowUnchanged(row, result);
+  const exactTermsForTouch = purchaseTermsExactForBatchTouch(
+    row,
+    result.purchaseTerms
+  );
   const hasPurchaseTerms = result.purchaseTerms !== undefined;
 
   if (result.locations !== undefined) {
     return {
       kind: "batch_locations",
-      canBatchTouchAfterStock: !row.hidden && unchangedPriceRow,
+      canBatchTouchAfterStock:
+        !row.hidden && unchangedPriceRow && exactTermsForTouch,
       hasPurchaseTerms,
     };
   }
 
-  if (row.hidden || !unchangedPriceRow) {
+  if (row.hidden || !unchangedPriceRow || !exactTermsForTouch) {
     return { kind: "individual" };
   }
 
@@ -275,7 +359,7 @@ export function classifyScrapeWrite(
  * Separates entries whose (shopId, productId) appears more than once so a
  * batch upsert/update never hits the same offer twice in one statement.
  */
-export function partitionUniqueBatchEntries<T extends readonly [ShopPriceRow, ScrapePriceResult]>(
+export function partitionUniqueBatchEntries<T extends ScrapeWriteEntry>(
   entries: readonly T[]
 ): { unique: T[]; duplicates: T[] } {
   const counts = new Map<string, number>();
@@ -296,4 +380,231 @@ export function partitionUniqueBatchEntries<T extends readonly [ShopPriceRow, Sc
   }
 
   return { unique, duplicates };
+}
+
+export type StockBatchOutcome = {
+  changedProductIds: Set<number>;
+  failedProductIds: Set<number>;
+};
+
+export type BatchWriteDependencies = {
+  batchTouch: (
+    shopId: number,
+    shopName: string,
+    hasPurchaseTerms: boolean,
+    expectedOutOfStockOnline: boolean | null | undefined,
+    entries: readonly ScrapeWriteEntry[]
+  ) => Promise<ScrapeWriteEntry[]>;
+  applyStockBatch: (
+    shopId: number,
+    items: ReadonlyArray<{
+      row: ShopPriceRow;
+      result: ScrapePriceSuccess;
+    }>
+  ) => Promise<StockBatchOutcome>;
+  applyIndividual: (
+    row: ShopPriceRow,
+    result: ScrapePriceResult,
+    options?: ApplyScrapeResultOptions
+  ) => Promise<void>;
+  revalidateProduct: (productId: number) => Promise<void>;
+};
+
+/**
+ * Orchestrates batched writes across unchanged rows, multi-branch stock rows,
+ * and individual fallbacks. High-value individual writes (price/URL/terms
+ * changes, unhides, errors) run first so a transient batch-touch issue cannot
+ * delay or drop them.
+ */
+export async function executeScrapeResultsBatch(
+  entries: readonly ScrapeWriteEntry[],
+  deps: BatchWriteDependencies,
+  options: { concurrency?: number } = {}
+) {
+  if (entries.length === 0) {
+    return;
+  }
+
+  const concurrency = Math.max(1, options.concurrency ?? 2);
+  const { unique, duplicates } = partitionUniqueBatchEntries(entries);
+
+  type TouchBucket = {
+    shopId: number;
+    shopName: string;
+    hasPurchaseTerms: boolean;
+    expectedOutOfStockOnline: boolean | null | undefined;
+    entries: ScrapeWriteEntry[];
+  };
+
+  type LocationBatchItem = {
+    entry: readonly [ShopPriceRow, ScrapePriceSuccess];
+    canBatchTouchAfterStock: boolean;
+    hasPurchaseTerms: boolean;
+  };
+
+  const touchBuckets = new Map<string, TouchBucket>();
+  const locationsByShop = new Map<number, LocationBatchItem[]>();
+  const initialIndividual: ScrapeWriteEntry[] = [];
+
+  for (const entry of unique) {
+    const [row, result] = entry;
+    const plan = classifyScrapeWrite(row, result);
+
+    if (plan.kind === "batch_touch") {
+      const oosKey =
+        plan.expectedOutOfStockOnline === undefined
+          ? "none"
+          : String(plan.expectedOutOfStockOnline);
+      const key = `${row.shopId}:${plan.hasPurchaseTerms ? 1 : 0}:${oosKey}`;
+      let bucket = touchBuckets.get(key);
+      if (!bucket) {
+        bucket = {
+          shopId: row.shopId,
+          shopName: result.shopName,
+          hasPurchaseTerms: plan.hasPurchaseTerms,
+          expectedOutOfStockOnline: plan.expectedOutOfStockOnline,
+          entries: [],
+        };
+        touchBuckets.set(key, bucket);
+      }
+      bucket.entries.push(entry);
+      continue;
+    }
+
+    if (plan.kind === "batch_locations" && result.status === "ok") {
+      const list = locationsByShop.get(row.shopId);
+      const item: LocationBatchItem = {
+        entry: [row, result],
+        canBatchTouchAfterStock: plan.canBatchTouchAfterStock,
+        hasPurchaseTerms: plan.hasPurchaseTerms,
+      };
+      if (list) {
+        list.push(item);
+      } else {
+        locationsByShop.set(row.shopId, [item]);
+      }
+      continue;
+    }
+
+    initialIndividual.push(entry);
+  }
+
+  // 1. Persist price/URL/terms/visibility/stock changes and hides first.
+  if (initialIndividual.length > 0) {
+    await mapWithConcurrency(
+      initialIndividual,
+      concurrency,
+      ([row, result]) => deps.applyIndividual(row, result)
+    );
+  }
+
+  // 2. Batch-touch unchanged non-branch rows; any row whose DB state drifted
+  //    mid-run or whose chunk errored falls back below.
+  const fallbackIndividual: ScrapeWriteEntry[] = [];
+  for (const bucket of touchBuckets.values()) {
+    const unmatched = await deps.batchTouch(
+      bucket.shopId,
+      bucket.shopName,
+      bucket.hasPurchaseTerms,
+      bucket.expectedOutOfStockOnline,
+      bucket.entries
+    );
+    fallbackIndividual.push(...unmatched);
+  }
+
+  // 3. Batch branch-stock rows per shop (e.g. Merca Jumbo). Only failed chunks
+  //    fall back to full applyIndividual; committed chunks keep their
+  //    changedProductIds for revalidation.
+  const postStockIndividual: Array<{
+    entry: readonly [ShopPriceRow, ScrapePriceSuccess];
+    stockChanged: boolean;
+  }> = [];
+  const productIdsToRevalidate: number[] = [];
+
+  for (const [shopId, items] of locationsByShop) {
+    const stockOutcome = await deps.applyStockBatch(
+      shopId,
+      items.map(({ entry: [row, result] }) => ({ row, result }))
+    );
+
+    const touchByTerms = new Map<boolean, ScrapeWriteEntry[]>();
+    for (const item of items) {
+      const productId = item.entry[0].productId;
+      if (stockOutcome.failedProductIds.has(productId)) {
+        fallbackIndividual.push(item.entry);
+        continue;
+      }
+
+      if (item.canBatchTouchAfterStock) {
+        const list = touchByTerms.get(item.hasPurchaseTerms);
+        if (list) {
+          list.push(item.entry);
+        } else {
+          touchByTerms.set(item.hasPurchaseTerms, [item.entry]);
+        }
+      } else {
+        postStockIndividual.push({
+          entry: item.entry,
+          stockChanged: stockOutcome.changedProductIds.has(productId),
+        });
+      }
+    }
+
+    const shopName = items[0].entry[1].shopName;
+    for (const [hasPurchaseTerms, touchEntries] of touchByTerms) {
+      const unmatched = await deps.batchTouch(
+        shopId,
+        shopName,
+        hasPurchaseTerms,
+        undefined,
+        touchEntries
+      );
+      const unmatchedIds = new Set(unmatched.map(([row]) => row.productId));
+      for (const [row, result] of touchEntries) {
+        const stockChanged = stockOutcome.changedProductIds.has(row.productId);
+        if (unmatchedIds.has(row.productId)) {
+          postStockIndividual.push({
+            entry: [row, result as ScrapePriceSuccess],
+            stockChanged,
+          });
+        } else if (stockChanged) {
+          productIdsToRevalidate.push(row.productId);
+        }
+      }
+    }
+  }
+
+  if (productIdsToRevalidate.length > 0) {
+    await mapWithConcurrency(
+      productIdsToRevalidate,
+      concurrency,
+      (productId) => deps.revalidateProduct(productId)
+    );
+  }
+
+  if (postStockIndividual.length > 0) {
+    await mapWithConcurrency(
+      postStockIndividual,
+      concurrency,
+      ({ entry: [row, result], stockChanged }) =>
+        deps.applyIndividual(row, result, {
+          skipStockSignals: true,
+          stockChanged,
+        })
+    );
+  }
+
+  if (fallbackIndividual.length > 0) {
+    await mapWithConcurrency(
+      fallbackIndividual,
+      concurrency,
+      ([row, result]) => deps.applyIndividual(row, result)
+    );
+  }
+
+  // Duplicate keys (should not happen in normal runs) run sequentially so
+  // ordering is preserved without intra-statement conflicts.
+  for (const [row, result] of duplicates) {
+    await deps.applyIndividual(row, result);
+  }
 }

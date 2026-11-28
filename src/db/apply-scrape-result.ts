@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "./client.js";
 import {
   measurementTypes,
@@ -15,27 +15,20 @@ import { revalidateProduct } from "./revalidate-product.js";
 import { relinkBravoOffer } from "./bravo-relink-offer.js";
 import { applyStockSignals, applyStockSignalsBatch } from "./offer-stock.js";
 import {
-  classifyScrapeWrite,
+  executeScrapeResultsBatch,
   normalizeUrlForComparison,
-  partitionUniqueBatchEntries,
   purchaseTermsChanged,
   purchaseTermsPatch,
+  type ApplyScrapeResultOptions,
+  type ScrapeWriteEntry,
   type ShopPriceRow,
 } from "./scrape-write-plan.js";
-import { mapWithConcurrency } from "../utils.js";
 
 export type { ShopPriceRow } from "./scrape-write-plan.js";
 
 type ProductMeasurementUpdate = NonNullable<
   ScrapePriceSuccess["productMeasurementUpdate"]
 >;
-
-type ApplyScrapeResultOptions = {
-  /** Stock signals were already applied in a batch transaction. */
-  skipStockSignals?: boolean;
-  /** Whether the preceding batch stock sync changed anything visible. */
-  stockChanged?: boolean;
-};
 
 const BATCH_TOUCH_CHUNK_SIZE = 250;
 
@@ -139,6 +132,8 @@ async function touchProductPrice(
   const updated = await query.returning({
     outOfStockOnline: productsShopsPrices.outOfStockOnline,
   });
+  // Compares against the snapshot loaded at the start of the run (safe because
+  // per-shop sync workflows do not overlap; avoids a second roundtrip/tx).
   return (
     updated.length > 0 &&
     row.outOfStockOnline !== undefined &&
@@ -420,8 +415,6 @@ export async function applyScrapeResult(
   );
 }
 
-type ScrapeWriteEntry = readonly [ShopPriceRow, ScrapePriceResult];
-
 async function batchTouchUnchangedRows(
   shopId: number,
   shopName: string,
@@ -432,40 +425,61 @@ async function batchTouchUnchangedRows(
   const unmatched: ScrapeWriteEntry[] = [];
   let touchedTotal = 0;
 
-  for (let i = 0; i < entries.length; i += BATCH_TOUCH_CHUNK_SIZE) {
-    const chunk = entries.slice(i, i + BATCH_TOUCH_CHUNK_SIZE);
-    const productIds = chunk.map(([row]) => row.productId);
-    const now = new Date();
-    const touched = await db
-      .update(productsShopsPrices)
-      .set({
-        hidden: false,
-        updateAt: now,
-        ...(hasPurchaseTerms ? { purchaseTermsObservedAt: now } : {}),
-      })
-      .where(
-        and(
-          eq(productsShopsPrices.shopId, shopId),
-          inArray(productsShopsPrices.productId, productIds),
-          or(
-            isNull(productsShopsPrices.hidden),
-            eq(productsShopsPrices.hidden, false)
-          ),
-          ...(expectedOutOfStockOnline === undefined
-            ? []
-            : [
-                sql`${productsShopsPrices.outOfStockOnline} IS NOT DISTINCT FROM ${expectedOutOfStockOnline}::boolean`,
-              ])
-        )
-      )
-      .returning({ productId: productsShopsPrices.productId });
+  // Lock rows in ascending productId order (matching applyStockSignalsBatch) so
+  // concurrent jobs touching the same shop cannot deadlock on lock order.
+  const sorted = [...entries].sort((a, b) => a[0].productId - b[0].productId);
 
-    const touchedIds = new Set(touched.map((row) => row.productId));
-    touchedTotal += touchedIds.size;
-    for (const entry of chunk) {
-      if (!touchedIds.has(entry[0].productId)) {
-        unmatched.push(entry);
+  for (let i = 0; i < sorted.length; i += BATCH_TOUCH_CHUNK_SIZE) {
+    const chunk = sorted.slice(i, i + BATCH_TOUCH_CHUNK_SIZE);
+    const productIds = chunk.map(([row]) => row.productId);
+
+    try {
+      const idList = sql.join(
+        productIds.map((id) => sql`${id}`),
+        sql`, `
+      );
+      const oosClause =
+        expectedOutOfStockOnline === undefined
+          ? sql``
+          : sql`AND "outOfStockOnline" IS NOT DISTINCT FROM ${expectedOutOfStockOnline}::boolean`;
+      const termsClause = hasPurchaseTerms
+        ? sql`, "purchaseTermsObservedAt" = now()`
+        : sql``;
+
+      const touched = await db.execute<{ productId: number }>(sql`
+        WITH locked AS MATERIALIZED (
+          SELECT "productId"
+          FROM products_shops_prices
+          WHERE "shopId" = ${shopId}
+            AND "productId" IN (${idList})
+            AND (hidden IS NULL OR hidden = false)
+            ${oosClause}
+          ORDER BY "productId" ASC
+          FOR UPDATE
+        )
+        UPDATE products_shops_prices AS p
+        SET hidden = false, "updateAt" = now()${termsClause}
+        FROM locked
+        WHERE p."shopId" = ${shopId}
+          AND p."productId" = locked."productId"
+        RETURNING p."productId" AS "productId"
+      `);
+
+      const touchedIds = new Set(
+        touched.map((row) => Number(row.productId))
+      );
+      touchedTotal += touchedIds.size;
+      for (const entry of chunk) {
+        if (!touchedIds.has(entry[0].productId)) {
+          unmatched.push(entry);
+        }
       }
+    } catch (error) {
+      console.error(
+        `[TOUCH] ${shopName} batch shopId=${shopId} chunkSize=${chunk.length} failed`,
+        error
+      );
+      unmatched.push(...chunk);
     }
   }
 
@@ -480,194 +494,35 @@ async function batchTouchUnchangedRows(
 
 /**
  * Applies a batch of scrape results with minimal Postgres roundtrips:
+ * - Price/URL/terms/visibility/stock changes run first via applyScrapeResult.
  * - Unchanged visible rows without branch locations share chunked UPDATEs.
  * - Rows with branch locations (Merca Jumbo) share batched stock-signal
  *   transactions and chunked touch UPDATEs.
- * - Rows with price/URL/terms/visibility/stock changes or errors fall back to
- *   applyScrapeResult.
  */
 export async function applyScrapeResultsBatch(
   entries: readonly ScrapeWriteEntry[],
   options: { concurrency?: number } = {}
 ) {
-  if (entries.length === 0) {
-    return;
-  }
-
-  const concurrency = Math.max(1, options.concurrency ?? 2);
-  const { unique, duplicates } = partitionUniqueBatchEntries(entries);
-
-  type TouchBucket = {
-    shopId: number;
-    shopName: string;
-    hasPurchaseTerms: boolean;
-    expectedOutOfStockOnline: boolean | null | undefined;
-    entries: ScrapeWriteEntry[];
-  };
-
-  type LocationBatchItem = {
-    entry: readonly [ShopPriceRow, ScrapePriceSuccess];
-    canBatchTouchAfterStock: boolean;
-    hasPurchaseTerms: boolean;
-  };
-
-  const touchBuckets = new Map<string, TouchBucket>();
-  const locationsByShop = new Map<number, LocationBatchItem[]>();
-  const individual: ScrapeWriteEntry[] = [];
-
-  for (const entry of unique) {
-    const [row, result] = entry;
-    const plan = classifyScrapeWrite(row, result);
-
-    if (plan.kind === "batch_touch") {
-      const oosKey =
-        plan.expectedOutOfStockOnline === undefined
-          ? "none"
-          : String(plan.expectedOutOfStockOnline);
-      const key = `${row.shopId}:${plan.hasPurchaseTerms ? 1 : 0}:${oosKey}`;
-      let bucket = touchBuckets.get(key);
-      if (!bucket) {
-        bucket = {
-          shopId: row.shopId,
-          shopName: result.shopName,
-          hasPurchaseTerms: plan.hasPurchaseTerms,
-          expectedOutOfStockOnline: plan.expectedOutOfStockOnline,
-          entries: [],
-        };
-        touchBuckets.set(key, bucket);
-      }
-      bucket.entries.push(entry);
-      continue;
-    }
-
-    if (plan.kind === "batch_locations" && result.status === "ok") {
-      const list = locationsByShop.get(row.shopId);
-      const item: LocationBatchItem = {
-        entry: [row, result],
-        canBatchTouchAfterStock: plan.canBatchTouchAfterStock,
-        hasPurchaseTerms: plan.hasPurchaseTerms,
-      };
-      if (list) {
-        list.push(item);
-      } else {
-        locationsByShop.set(row.shopId, [item]);
-      }
-      continue;
-    }
-
-    individual.push(entry);
-  }
-
-  // 1. Batch-touch unchanged non-branch rows; any row whose DB state drifted
-  //    mid-run (e.g. hidden or outOfStockOnline changed) falls back below.
-  for (const bucket of touchBuckets.values()) {
-    const unmatched = await batchTouchUnchangedRows(
-      bucket.shopId,
-      bucket.shopName,
-      bucket.hasPurchaseTerms,
-      bucket.expectedOutOfStockOnline,
-      bucket.entries
-    );
-    individual.push(...unmatched);
-  }
-
-  // 2. Batch branch-stock rows per shop (e.g. Merca Jumbo).
-  const postStockIndividual: Array<{
-    entry: readonly [ShopPriceRow, ScrapePriceSuccess];
-    stockChanged: boolean;
-  }> = [];
-  const productIdsToRevalidate: number[] = [];
-
-  for (const [shopId, items] of locationsByShop) {
-    const stockOutcome = await applyStockSignalsBatch(
-      shopId,
-      items.map(({ entry: [row, result] }) => ({
-        offer: {
-          productId: row.productId,
-          shopId: row.shopId,
-          url: row.url,
-          api: row.api,
-        },
-        result,
-      }))
-    );
-
-    if (!stockOutcome.ok) {
-      for (const item of items) {
-        individual.push(item.entry);
-      }
-      continue;
-    }
-
-    const touchByTerms = new Map<boolean, ScrapeWriteEntry[]>();
-    for (const item of items) {
-      if (item.canBatchTouchAfterStock) {
-        const list = touchByTerms.get(item.hasPurchaseTerms);
-        if (list) {
-          list.push(item.entry);
-        } else {
-          touchByTerms.set(item.hasPurchaseTerms, [item.entry]);
-        }
-      } else {
-        postStockIndividual.push({
-          entry: item.entry,
-          stockChanged: stockOutcome.changedProductIds.has(
-            item.entry[0].productId
-          ),
-        });
-      }
-    }
-
-    const shopName = items[0].entry[1].shopName;
-    for (const [hasPurchaseTerms, touchEntries] of touchByTerms) {
-      const unmatched = await batchTouchUnchangedRows(
-        shopId,
-        shopName,
-        hasPurchaseTerms,
-        undefined,
-        touchEntries
-      );
-      const unmatchedIds = new Set(unmatched.map(([row]) => row.productId));
-      for (const [row, result] of touchEntries) {
-        const stockChanged = stockOutcome.changedProductIds.has(row.productId);
-        if (unmatchedIds.has(row.productId)) {
-          postStockIndividual.push({
-            entry: [row, result as ScrapePriceSuccess],
-            stockChanged,
-          });
-        } else if (stockChanged) {
-          productIdsToRevalidate.push(row.productId);
-        }
-      }
-    }
-  }
-
-  if (productIdsToRevalidate.length > 0) {
-    await mapWithConcurrency(
-      productIdsToRevalidate,
-      concurrency,
-      (productId) => revalidateProduct(productId)
-    );
-  }
-
-  if (postStockIndividual.length > 0) {
-    await mapWithConcurrency(
-      postStockIndividual,
-      concurrency,
-      ({ entry: [row, result], stockChanged }) =>
-        applyScrapeResult(row, result, { skipStockSignals: true, stockChanged })
-    );
-  }
-
-  if (individual.length > 0) {
-    await mapWithConcurrency(individual, concurrency, ([row, result]) =>
-      applyScrapeResult(row, result)
-    );
-  }
-
-  // Duplicate keys (should not happen in normal runs) run sequentially so
-  // ordering is preserved without intra-statement conflicts.
-  for (const [row, result] of duplicates) {
-    await applyScrapeResult(row, result);
-  }
+  await executeScrapeResultsBatch(
+    entries,
+    {
+      batchTouch: batchTouchUnchangedRows,
+      applyStockBatch: (shopId, items) =>
+        applyStockSignalsBatch(
+          shopId,
+          items.map(({ row, result }) => ({
+            offer: {
+              productId: row.productId,
+              shopId: row.shopId,
+              url: row.url,
+              api: row.api,
+            },
+            result,
+          }))
+        ),
+      applyIndividual: applyScrapeResult,
+      revalidateProduct,
+    },
+    options
+  );
 }

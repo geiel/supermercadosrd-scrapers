@@ -12,6 +12,7 @@ import {
   type BranchRef,
   type OfferKey,
   type OfferLocationValue,
+  type StockBatchOutcome,
 } from "./scrape-write-plan.js";
 import type { ScrapeLocationAvailability, ScrapePriceSuccess } from "../types.js";
 
@@ -205,20 +206,22 @@ export async function applyStockSignals(
 
 /**
  * Applies branch stock signals and «agotado online» for a batch of unique
- * offers from the same shop in a single transaction per chunk. Preserves the
- * per-offer (url, api) lock check and exact change detection while cutting
- * Postgres roundtrips by ~100x on multi-branch stores like Merca Jumbo.
+ * offers from the same shop in one transaction per chunk. Each chunk commits
+ * or fails independently so a transient failure on one chunk never discards
+ * changedProductIds (revalidation) for chunks that already committed.
  */
 export async function applyStockSignalsBatch(
   shopId: number,
   items: ReadonlyArray<{ offer: StockSignalOffer; result: StockSignalResult }>
-): Promise<{ ok: true; changedProductIds: Set<number> } | { ok: false }> {
+): Promise<StockBatchOutcome> {
+  const changedProductIds = new Set<number>();
+  const failedProductIds = new Set<number>();
+
   if (items.length === 0) {
-    return { ok: true, changedProductIds: new Set() };
+    return { changedProductIds, failedProductIds };
   }
 
-  const changedProductIds = new Set<number>();
-
+  let ids: Map<string, BranchRef>;
   try {
     const allExternalIds: string[] = [];
     for (const { result } of items) {
@@ -226,32 +229,45 @@ export async function applyStockSignalsBatch(
         allExternalIds.push(location.externalId);
       }
     }
-    const ids = await resolveLocationIds(shopId, allExternalIds);
+    ids = await resolveLocationIds(shopId, allExternalIds);
+  } catch (error) {
+    console.error(
+      `[STOCK] batch shopId=${shopId} count=${items.length} resolveLocationIds failed`,
+      error
+    );
+    for (const { offer } of items) {
+      failedProductIds.add(offer.productId);
+    }
+    return { changedProductIds, failedProductIds };
+  }
 
-    for (let offset = 0; offset < items.length; offset += STOCK_BATCH_SIZE) {
-      const chunk = items.slice(offset, offset + STOCK_BATCH_SIZE);
-      const observedAt = new Date();
-      const prepared = chunk.map(({ offer, result }) => {
-        const byCode = new Map(
-          (result.locations ?? []).map((location) => [
-            location.externalId,
-            location,
-          ])
-        );
-        return {
-          offer,
-          outOfStockOnline: resolveEffectiveOutOfStockOnline(
-            byCode,
-            ids,
-            result.outOfStockOnline
-          ),
-          values: buildOfferLocationValues(offer, byCode, ids, observedAt),
-        };
-      });
+  for (let offset = 0; offset < items.length; offset += STOCK_BATCH_SIZE) {
+    const chunk = items.slice(offset, offset + STOCK_BATCH_SIZE);
+    const observedAt = new Date();
+    const prepared = chunk.map(({ offer, result }) => {
+      const byCode = new Map(
+        (result.locations ?? []).map((location) => [
+          location.externalId,
+          location,
+        ])
+      );
+      return {
+        offer,
+        outOfStockOnline: resolveEffectiveOutOfStockOnline(
+          byCode,
+          ids,
+          result.outOfStockOnline
+        ),
+        values: buildOfferLocationValues(offer, byCode, ids, observedAt),
+      };
+    });
 
-      const productIds = prepared.map((item) => item.offer.productId);
+    const productIds = prepared.map((item) => item.offer.productId);
 
-      await db.transaction(async (tx) => {
+    try {
+      const chunkChangedIds = await db.transaction(async (tx) => {
+        const chunkChanged: number[] = [];
+
         const lockedRows = await tx
           .select({
             productId: productsShopsPrices.productId,
@@ -282,7 +298,7 @@ export async function applyStockSignalsBatch(
           );
         });
         if (valid.length === 0) {
-          return;
+          return chunkChanged;
         }
 
         const validProductIds = valid.map((item) => item.offer.productId);
@@ -316,12 +332,14 @@ export async function applyStockSignalsBatch(
 
         for (const item of valid) {
           const locked = lockedByProductId.get(item.offer.productId)!;
+          let itemChanged = false;
+
           if (
             item.outOfStockOnline !== undefined &&
             locked.outOfStockOnline !== item.outOfStockOnline
           ) {
             oosBuckets.get(item.outOfStockOnline)!.push(item.offer.productId);
-            changedProductIds.add(item.offer.productId);
+            itemChanged = true;
           }
 
           const existing = existingByProductId.get(item.offer.productId) ?? [];
@@ -330,8 +348,12 @@ export async function applyStockSignalsBatch(
             item.values
           );
           if (changed) {
-            changedProductIds.add(item.offer.productId);
+            itemChanged = true;
           }
+          if (itemChanged) {
+            chunkChanged.push(item.offer.productId);
+          }
+
           allUpserts.push(...item.values);
           for (const locationId of staleLocationIds) {
             stalePairs.push({ productId: item.offer.productId, locationId });
@@ -388,17 +410,25 @@ export async function applyStockSignalsBatch(
               )
             );
         }
-      });
-    }
 
-    return { ok: true, changedProductIds };
-  } catch (error) {
-    console.error(
-      `[STOCK] batch shopId=${shopId} count=${items.length} failed`,
-      error
-    );
-    return { ok: false };
+        return chunkChanged;
+      });
+
+      for (const productId of chunkChangedIds) {
+        changedProductIds.add(productId);
+      }
+    } catch (error) {
+      console.error(
+        `[STOCK] batch shopId=${shopId} chunkSize=${chunk.length} failed`,
+        error
+      );
+      for (const { offer } of chunk) {
+        failedProductIds.add(offer.productId);
+      }
+    }
   }
+
+  return { changedProductIds, failedProductIds };
 }
 
 /** For tests and one-off scripts that switch databases. */
